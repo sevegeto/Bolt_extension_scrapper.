@@ -215,7 +215,29 @@
   <div class="container">
     <div class="header">
       <h1>🛍️ Product Scraper</h1>
-      <p>Extract product data to Google Sheets</p>
+      <p>Extract product data to your dashboard</p>
+    </div>
+
+    <div id="authSection" class="card" style="display: none;">
+      <h3 style="margin-bottom: 15px; font-size: 16px; color: #495057;">Sign In Required</h3>
+      <p style="margin-bottom: 15px; font-size: 13px; color: #6c757d;">
+        Please sign in to save products to your dashboard.
+      </p>
+      <button id="openDashboardBtn" class="btn btn-primary">
+        Open Dashboard to Sign In
+      </button>
+    </div>
+
+    <div id="userSection" class="card" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <div>
+          <div style="font-size: 12px; color: #6c757d;">Signed in as</div>
+          <div id="userEmail" style="font-size: 14px; font-weight: 600; color: #495057;"></div>
+        </div>
+        <button id="signOutBtn" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">
+          Sign Out
+        </button>
+      </div>
     </div>
 
     <div id="configWarning" class="config-warning" style="display: none;">
@@ -226,12 +248,16 @@
     <div id="status" class="status"></div>
 
     <div class="card">
-      <button id="scrapeBtn" class="btn btn-primary">
+      <button id="scrapeBtn" class="btn btn-primary" disabled>
         📦 Scrape Product Data
       </button>
 
       <button id="previewBtn" class="btn btn-secondary">
         👁️ Preview Data
+      </button>
+
+      <button id="viewDashboardBtn" class="btn btn-secondary">
+        🔗 View Dashboard
       </button>
     </div>
 
@@ -244,6 +270,7 @@
   </div>
 
   <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="popup.js"></script>
 </body>
 </html>

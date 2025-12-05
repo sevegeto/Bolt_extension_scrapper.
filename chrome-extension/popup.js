@@ -4,12 +4,61 @@ const statusDiv = document.getElementById('status');
 const previewContainer = document.getElementById('previewContainer');
 const previewDiv = document.getElementById('preview');
 const configWarning = document.getElementById('configWarning');
+const authSection = document.getElementById('authSection');
+const userSection = document.getElementById('userSection');
+const userEmail = document.getElementById('userEmail');
+const signOutBtn = document.getElementById('signOutBtn');
+const openDashboardBtn = document.getElementById('openDashboardBtn');
+const viewDashboardBtn = document.getElementById('viewDashboardBtn');
 
 let currentProductData = null;
+let supabase = null;
+let currentUser = null;
 
-if (CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
+if (CONFIG.SAVE_TO === 'sheets' && CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
   configWarning.style.display = 'block';
 }
+
+if (CONFIG.SAVE_TO === 'supabase' || !CONFIG.SAVE_TO) {
+  const { createClient } = window.supabase;
+  supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+  checkAuth();
+}
+
+async function checkAuth() {
+  if (!supabase) return;
+
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (session && session.user) {
+    currentUser = session.user;
+    userEmail.textContent = session.user.email;
+    authSection.style.display = 'none';
+    userSection.style.display = 'block';
+    scrapeBtn.disabled = false;
+  } else {
+    currentUser = null;
+    authSection.style.display = 'block';
+    userSection.style.display = 'none';
+    scrapeBtn.disabled = true;
+  }
+}
+
+signOutBtn.addEventListener('click', async () => {
+  if (supabase) {
+    await supabase.auth.signOut();
+    checkAuth();
+  }
+});
+
+openDashboardBtn.addEventListener('click', () => {
+  chrome.tabs.create({ url: CONFIG.DASHBOARD_URL });
+});
+
+viewDashboardBtn.addEventListener('click', () => {
+  chrome.tabs.create({ url: CONFIG.DASHBOARD_URL });
+});
 
 function showStatus(message, type) {
   statusDiv.textContent = message;
@@ -96,8 +145,13 @@ previewBtn.addEventListener('click', async () => {
 
 scrapeBtn.addEventListener('click', async () => {
   try {
-    if (CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
+    if (CONFIG.SAVE_TO === 'sheets' && CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
       showStatus('✗ Please configure Google Apps Script URL in config.js', 'error');
+      return;
+    }
+
+    if (CONFIG.SAVE_TO === 'supabase' && !currentUser) {
+      showStatus('✗ Please sign in first', 'error');
       return;
     }
 
@@ -120,32 +174,83 @@ scrapeBtn.addEventListener('click', async () => {
 
     currentProductData = productData;
 
-    showStatus('⏳ Sending data to Google Sheets...', 'loading');
+    if (CONFIG.SAVE_TO === 'supabase') {
+      showStatus('⏳ Saving to dashboard...', 'loading');
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT_MS);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Not authenticated');
+      }
 
-    const response = await fetch(CONFIG.GOOGLE_APPS_SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(productData),
-      signal: controller.signal
-    });
+      const productRecord = {
+        user_id: session.user.id,
+        source_url: productData.url,
+        domain: productData.domain,
+        title: productData.title === 'N/A' ? null : productData.title,
+        price: productData.price === 'N/A' ? null : productData.price,
+        currency: productData.currency === 'N/A' ? 'USD' : productData.currency,
+        brand: productData.brand === 'N/A' ? null : productData.brand,
+        description: productData.description === 'N/A' ? null : productData.description,
+        images: productData.imageUrl && productData.imageUrl !== 'N/A' ? [productData.imageUrl] : [],
+        features: [],
+        specifications: {
+          model: productData.model === 'N/A' ? null : productData.model,
+          mpn: productData.mpn === 'N/A' ? null : productData.mpn,
+          sku: productData.sku === 'N/A' ? null : productData.sku,
+          upc: productData.upc === 'N/A' ? null : productData.upc,
+          gtin: productData.gtin === 'N/A' ? null : productData.gtin,
+          color: productData.color === 'N/A' ? null : productData.color,
+          size: productData.size === 'N/A' ? null : productData.size,
+        },
+        availability: null,
+        rating: null,
+        review_count: 0,
+        scrape_method: 'extension',
+        raw_data: productData,
+      };
 
-    clearTimeout(timeoutId);
+      const { error } = await supabase.from('products').insert(productRecord);
 
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title: 'Success!',
-      message: 'Product data added to Google Sheets',
-      priority: 2
-    });
+      if (error) throw error;
 
-    showStatus('✓ Product data successfully added to Google Sheets!', 'success');
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Success!',
+        message: 'Product saved to your dashboard',
+        priority: 2
+      });
+
+      showStatus('✓ Product data successfully saved to dashboard!', 'success');
+
+    } else {
+      showStatus('⏳ Sending data to Google Sheets...', 'loading');
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT_MS);
+
+      const response = await fetch(CONFIG.GOOGLE_APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(productData),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Success!',
+        message: 'Product data added to Google Sheets',
+        priority: 2
+      });
+
+      showStatus('✓ Product data successfully added to Google Sheets!', 'success');
+    }
 
     previewDiv.innerHTML = formatPreview(productData);
     previewContainer.style.display = 'block';
@@ -170,7 +275,7 @@ scrapeBtn.addEventListener('click', async () => {
       priority: 2
     });
   } finally {
-    scrapeBtn.disabled = false;
+    scrapeBtn.disabled = !currentUser && CONFIG.SAVE_TO === 'supabase';
     previewBtn.disabled = false;
   }
 });
