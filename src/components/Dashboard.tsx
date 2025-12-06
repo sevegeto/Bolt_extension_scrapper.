@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, ScrapeJob } from '../lib/supabase';
-import { LogOut, Plus, Grid, List, Download, Loader2 } from 'lucide-react';
+import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown } from 'lucide-react';
 import ProductGrid from './ProductGrid';
 import BulkImport from './BulkImport';
 import JobsPanel from './JobsPanel';
@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<ScrapeJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState('');
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   useEffect(() => {
     loadUserData();
@@ -73,28 +74,70 @@ export default function Dashboard() {
     await supabase.auth.signOut();
   };
 
-  const handleExport = () => {
-    const csv = [
-      ['Title', 'Brand', 'Price', 'Currency', 'URL', 'Domain', 'Rating', 'Reviews', 'Availability', 'Scraped At'].join(','),
-      ...products.map(p => [
-        `"${(p.title || '').replace(/"/g, '""')}"`,
-        `"${(p.brand || '').replace(/"/g, '""')}"`,
-        p.price || '',
-        p.currency,
-        p.source_url,
-        p.domain || '',
-        p.rating || '',
-        p.review_count || 0,
-        p.availability || '',
-        new Date(p.created_at).toLocaleString()
-      ].join(','))
-    ].join('\n');
+  const handleExport = (format: 'full' | 'mercadolibre' = 'full') => {
+    let csv: string;
 
-    const blob = new Blob([csv], { type: 'text/csv' });
+    if (format === 'mercadolibre') {
+      csv = [
+        ['Title', 'Price', 'Currency', 'Condition', 'Available_Quantity', 'Description', 'Brand', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'Features', 'Source_URL'].join(','),
+        ...products.map(p => {
+          const images = p.images || [];
+          const features = (p.features || []).join('; ');
+          const condition = 'new';
+          const quantity = 1;
+
+          return [
+            `"${(p.title || '').replace(/"/g, '""')}"`,
+            p.price || '',
+            p.currency || 'USD',
+            condition,
+            quantity,
+            `"${(p.description || '').replace(/"/g, '""')}"`,
+            `"${(p.brand || '').replace(/"/g, '""')}"`,
+            images[0] || '',
+            images[1] || '',
+            images[2] || '',
+            images[3] || '',
+            images[4] || '',
+            `"${features.replace(/"/g, '""')}"`,
+            p.source_url
+          ].join(',');
+        })
+      ].join('\n');
+    } else {
+      csv = [
+        ['Title', 'Brand', 'Price', 'Currency', 'Description', 'Images', 'Features', 'Specifications', 'Availability', 'Rating', 'Reviews', 'Domain', 'Source_URL', 'Scraped_At'].join(','),
+        ...products.map(p => {
+          const images = (p.images || []).join('|');
+          const features = (p.features || []).join('|');
+          const specs = JSON.stringify(p.specifications || {}).replace(/"/g, '""');
+
+          return [
+            `"${(p.title || '').replace(/"/g, '""')}"`,
+            `"${(p.brand || '').replace(/"/g, '""')}"`,
+            p.price || '',
+            p.currency || 'USD',
+            `"${(p.description || '').replace(/"/g, '""')}"`,
+            `"${images}"`,
+            `"${features}"`,
+            `"${specs}"`,
+            `"${(p.availability || '').replace(/"/g, '""')}"`,
+            p.rating || '',
+            p.review_count || 0,
+            p.domain || '',
+            p.source_url,
+            new Date(p.created_at).toLocaleString()
+          ].join(',');
+        })
+      ].join('\n');
+    }
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `products-${new Date().toISOString().split('T')[0]}.csv`;
+    const formatSuffix = format === 'mercadolibre' ? '-mercadolibre' : '-full';
+    a.download = `products${formatSuffix}-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -175,13 +218,40 @@ export default function Dashboard() {
               Jobs
             </button>
             {view === 'products' && products.length > 0 && (
-              <button
-                onClick={handleExport}
-                className="px-4 py-2 bg-white text-slate-700 rounded-lg font-medium hover:bg-slate-100 transition-colors"
-              >
-                <Download className="w-4 h-4 inline mr-2" />
-                Export CSV
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowExportMenu(!showExportMenu)}
+                  className="px-4 py-2 bg-white text-slate-700 rounded-lg font-medium hover:bg-slate-100 transition-colors flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Export CSV
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                {showExportMenu && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-slate-200 py-2 z-10">
+                    <button
+                      onClick={() => {
+                        handleExport('full');
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors"
+                    >
+                      <div className="font-medium text-slate-900">Full Export</div>
+                      <div className="text-xs text-slate-500">All data including images, features, specs</div>
+                    </button>
+                    <button
+                      onClick={() => {
+                        handleExport('mercadolibre');
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors"
+                    >
+                      <div className="font-medium text-slate-900">MercadoLibre Format</div>
+                      <div className="text-xs text-slate-500">Optimized for marketplace import</div>
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
