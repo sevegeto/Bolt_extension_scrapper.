@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ScrapeJob, supabase } from '../lib/supabase';
-import { Clock, CheckCircle, XCircle, Loader2, RefreshCw, Play } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, Loader2, RefreshCw, Play, Trash2 } from 'lucide-react';
 
 type Props = {
   jobs: ScrapeJob[];
@@ -9,6 +9,25 @@ type Props = {
 
 export default function JobsPanel({ jobs, onRefresh }: Props) {
   const [processing, setProcessing] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDeleteJob = async (jobId: string) => {
+    if (!confirm('Are you sure you want to delete this job?')) return;
+
+    setDeleting(jobId);
+    try {
+      const { error } = await supabase.from('scrape_jobs').delete().eq('id', jobId);
+
+      if (error) throw error;
+
+      onRefresh();
+    } catch (error: any) {
+      console.error('Failed to delete job:', error);
+      alert(`Error: ${error.message}`);
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const handleProcessJob = async () => {
     setProcessing(true);
@@ -120,7 +139,7 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
             className="bg-white rounded-xl shadow-sm border border-slate-200 p-6"
           >
             <div className="flex items-start justify-between mb-4">
-              <div className="flex items-start gap-3">
+              <div className="flex items-start gap-3 flex-1">
                 {getStatusIcon(job.status)}
                 <div>
                   <div className="flex items-center gap-2 mb-1">
@@ -136,6 +155,14 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
                   </p>
                 </div>
               </div>
+              <button
+                onClick={() => handleDeleteJob(job.id)}
+                disabled={deleting === job.id || job.status === 'processing'}
+                className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Delete job"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -166,20 +193,33 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
                 </p>
               )}
 
-              {job.error_log && job.error_log.length > 0 && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <p className="text-sm font-medium text-red-900 mb-1">
-                    Errors ({job.error_log.length})
-                  </p>
-                  <div className="text-xs text-red-700 space-y-1 max-h-32 overflow-y-auto">
-                    {job.error_log.slice(0, 5).map((err: any, idx: number) => (
-                      <div key={idx}>{typeof err === 'string' ? err : JSON.stringify(err)}</div>
-                    ))}
-                    {job.error_log.length > 5 && (
-                      <div className="font-medium">... and {job.error_log.length - 5} more</div>
-                    )}
+              {job.results && typeof job.results === 'object' && 'success' in job.results && (
+                <div className="flex gap-4 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-600">Success:</span>
+                    <span className="font-medium text-green-600">{job.results.success || 0}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-600">Failed:</span>
+                    <span className="font-medium text-red-600">{job.results.failed || 0}</span>
                   </div>
                 </div>
+              )}
+
+              {job.error_log && job.error_log.length > 0 && (
+                <details className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <summary className="text-sm font-medium text-red-900 cursor-pointer">
+                    View Errors ({job.error_log.length})
+                  </summary>
+                  <div className="text-xs text-red-700 space-y-1 max-h-32 overflow-y-auto mt-2">
+                    {job.error_log.map((err: any, idx: number) => (
+                      <div key={idx} className="border-t border-red-200 pt-1 mt-1">
+                        <div className="font-medium">{err.url || 'Unknown URL'}</div>
+                        <div>{err.error || JSON.stringify(err)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               )}
             </div>
           </div>

@@ -28,6 +28,20 @@ function extractDomain(url: string): string {
   }
 }
 
+function extractMetaContent(html: string, name: string): string | null {
+  const patterns = [
+    new RegExp(`<meta property="${name}" content="([^"]+)"`, 'i'),
+    new RegExp(`<meta name="${name}" content="([^"]+)"`, 'i'),
+    new RegExp(`<meta itemprop="${name}" content="([^"]+)"`, 'i'),
+  ];
+  
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 function extractText(html: string, selector: string): string | null {
   const regex = new RegExp(`${selector}[^>]*>([^<]+)<`, 'i');
   const match = html.match(regex);
@@ -46,9 +60,15 @@ function extractAllMatches(html: string, pattern: RegExp): string[] {
 async function scrapeProduct(url: string): Promise<ProductData> {
   const response = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
     },
   });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
 
   const html = await response.text();
   const domain = extractDomain(url);
@@ -66,18 +86,33 @@ async function scrapeProduct(url: string): Promise<ProductData> {
     review_count: 0,
   };
 
+  data.title = extractMetaContent(html, 'og:title') ||
+               extractMetaContent(html, 'twitter:title') ||
+               extractText(html, '<h1');
+  
+  data.description = extractMetaContent(html, 'og:description') ||
+                     extractMetaContent(html, 'description');
+  
+  const ogImage = extractMetaContent(html, 'og:image') || extractMetaContent(html, 'twitter:image');
+  if (ogImage) {
+    data.images = [ogImage];
+  }
+
   if (domain.includes('amazon')) {
-    data.title = extractText(html, '<span id="productTitle"') || 
-                 extractText(html, '<h1');
+    const productTitle = extractText(html, '<span id="productTitle"');
+    if (productTitle) data.title = productTitle;
     
     const priceWhole = extractText(html, '<span class="a-price-whole"');
     const priceFraction = extractText(html, '<span class="a-price-fraction"');
-    data.price = priceWhole && priceFraction ? `${priceWhole}.${priceFraction}` : priceWhole;
+    if (priceWhole) {
+      data.price = priceFraction ? `${priceWhole}.${priceFraction}` : priceWhole;
+    }
     
-    data.brand = extractText(html, '<a id="bylineInfo"');
+    const brandMatch = html.match(/<a id="bylineInfo"[^>]*>([^<]+)</);
+    if (brandMatch) data.brand = brandMatch[1].replace('Visit the ', '').replace(' Store', '').trim();
     
     const imageMatches = html.match(/"hiRes":"([^"]+)"/g);
-    if (imageMatches) {
+    if (imageMatches && imageMatches.length > 0) {
       data.images = imageMatches.map(m => m.match(/"hiRes":"([^"]+)"/)?.[1] || '').filter(Boolean);
     }
     
@@ -90,27 +125,29 @@ async function scrapeProduct(url: string): Promise<ProductData> {
     if (reviewMatch) {
       data.review_count = parseInt(reviewMatch[1].replace(/,/g, ''));
     }
+
+    const availMatch = html.match(/<span class="a-size-medium a-color-success">([^<]+)</);
+    if (availMatch) data.availability = availMatch[1].trim();
+    
   } else if (domain.includes('ebay')) {
-    data.title = extractText(html, '<h1 class="x-item-title');
-    data.price = extractText(html, '<div class="x-price-primary');
+    const titleMatch = html.match(/<h1 class="x-item-title[^"]*">([^<]+)</);
+    if (titleMatch) data.title = titleMatch[1].trim();
+    
+    const priceMatch = html.match(/<div class="x-price-primary[^"]*">\s*<span[^>]*>([^<]+)</);
+    if (priceMatch) data.price = priceMatch[1].trim();
     
     const imageMatches = extractAllMatches(html, /<img[^>]+src="([^"]+)"[^>]*alt="Picture/);
-    data.images = imageMatches;
-  } else if (domain.includes('walmart')) {
-    data.title = extractText(html, '<h1');
+    if (imageMatches.length > 0) data.images = imageMatches;
     
+  } else if (domain.includes('walmart')) {
     const priceMatch = html.match(/"price":"([^"]+)"/);
     if (priceMatch) {
       data.price = priceMatch[1];
     }
-  } else {
-    data.title = extractText(html, '<h1') || 
-                 extractText(html, '<title');
-    
-    const ogImage = html.match(/<meta property="og:image" content="([^"]+)"/);
-    if (ogImage) {
-      data.images = [ogImage[1]];
-    }
+  }
+
+  if (!data.title) {
+    data.title = extractText(html, '<title');
   }
 
   return data;
@@ -171,6 +208,10 @@ Deno.serve(async (req: Request) => {
         const productData = await scrapeProduct(url);
         const domain = extractDomain(url);
 
+        if (!productData.title) {
+          throw new Error('Could not extract product title');
+        }
+
         const { error: insertError } = await supabase
           .from('products')
           .insert({
@@ -192,7 +233,7 @@ Deno.serve(async (req: Request) => {
           });
 
         if (insertError) {
-          errors.push({ url, error: insertError.message });
+          errors.push({ url, error: insertError.message, details: insertError });
         } else {
           successCount++;
         }
@@ -224,13 +265,14 @@ Deno.serve(async (req: Request) => {
         jobId: job.id,
         status: finalStatus,
         results: { success: successCount, failed: errors.length },
-        errors: errors.length > 0 ? errors.slice(0, 5) : undefined,
+        errors: errors.length > 0 ? errors : undefined,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error: any) {
+    console.error('Edge function error:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: error.message, stack: error.stack }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
