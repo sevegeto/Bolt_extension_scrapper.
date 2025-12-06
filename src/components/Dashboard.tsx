@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, ScrapeJob } from '../lib/supabase';
-import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown } from 'lucide-react';
+import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown, FileSpreadsheet } from 'lucide-react';
 import ProductGrid from './ProductGrid';
 import BulkImport from './BulkImport';
 import JobsPanel from './JobsPanel';
@@ -74,7 +74,22 @@ export default function Dashboard() {
     await supabase.auth.signOut();
   };
 
-  const handleExport = (format: 'full' | 'mercadolibre' = 'full') => {
+  const handleGoogleSheetsExport = () => {
+    const sheetsUrl = 'https://docs.google.com/spreadsheets/create';
+    const csvData = generateCSV('full');
+
+    alert('To export to Google Sheets:\n\n1. Copy your data (click OK to download CSV)\n2. Go to Google Sheets and create a new spreadsheet\n3. File > Import > Upload > Select the downloaded CSV\n4. Click "Import data"\n\nAlternatively, use the Chrome Extension to send data directly to Google Sheets via the Apps Script.');
+
+    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `products-for-sheets-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const generateCSV = (format: 'full' | 'mercadolibre'): string => {
     let csv: string;
 
     if (format === 'mercadolibre') {
@@ -106,9 +121,10 @@ export default function Dashboard() {
       ].join('\n');
     } else {
       csv = [
-        ['Title', 'Brand', 'Price', 'Currency', 'Description', 'Images', 'Features', 'Specifications', 'Availability', 'Rating', 'Reviews', 'Domain', 'Source_URL', 'Scraped_At'].join(','),
+        ['Title', 'Brand', 'Price', 'Currency', 'Description', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'All_Images', 'Features', 'Specifications', 'Availability', 'Rating', 'Reviews', 'Domain', 'Source_URL', 'Scraped_At'].join(','),
         ...products.map(p => {
-          const images = (p.images || []).join('|');
+          const images = p.images || [];
+          const allImages = images.join('|');
           const features = (p.features || []).join('|');
           const specs = JSON.stringify(p.specifications || {}).replace(/"/g, '""');
 
@@ -118,7 +134,12 @@ export default function Dashboard() {
             p.price || '',
             p.currency || 'USD',
             `"${(p.description || '').replace(/"/g, '""')}"`,
-            `"${images}"`,
+            images[0] || '',
+            images[1] || '',
+            images[2] || '',
+            images[3] || '',
+            images[4] || '',
+            `"${allImages}"`,
             `"${features}"`,
             `"${specs}"`,
             `"${(p.availability || '').replace(/"/g, '""')}"`,
@@ -132,6 +153,11 @@ export default function Dashboard() {
       ].join('\n');
     }
 
+    return csv;
+  };
+
+  const handleExport = (format: 'full' | 'mercadolibre' = 'full') => {
+    const csv = generateCSV(format);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -237,7 +263,7 @@ export default function Dashboard() {
                       className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors"
                     >
                       <div className="font-medium text-slate-900">Full Export</div>
-                      <div className="text-xs text-slate-500">All data including images, features, specs</div>
+                      <div className="text-xs text-slate-500">All data with image URLs in columns</div>
                     </button>
                     <button
                       onClick={() => {
@@ -248,6 +274,19 @@ export default function Dashboard() {
                     >
                       <div className="font-medium text-slate-900">MercadoLibre Format</div>
                       <div className="text-xs text-slate-500">Optimized for marketplace import</div>
+                    </button>
+                    <button
+                      onClick={() => {
+                        handleGoogleSheetsExport();
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors border-t border-slate-200"
+                    >
+                      <div className="font-medium text-slate-900 flex items-center gap-2">
+                        <FileSpreadsheet className="w-4 h-4" />
+                        Google Sheets
+                      </div>
+                      <div className="text-xs text-slate-500">Export for Google Sheets import</div>
                     </button>
                   </div>
                 )}

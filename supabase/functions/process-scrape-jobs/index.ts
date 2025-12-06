@@ -63,6 +63,14 @@ async function scrapeProduct(url: string): Promise<ProductData> {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Cache-Control': 'max-age=0',
     },
   });
 
@@ -71,6 +79,11 @@ async function scrapeProduct(url: string): Promise<ProductData> {
   }
 
   const html = await response.text();
+
+  if (html.includes('captcha') || html.includes('blocked') || html.length < 1000) {
+    throw new Error('Site blocked request - CAPTCHA or bot detection triggered');
+  }
+
   const domain = extractDomain(url);
 
   let data: ProductData = {
@@ -144,10 +157,45 @@ async function scrapeProduct(url: string): Promise<ProductData> {
     if (priceMatch) {
       data.price = priceMatch[1];
     }
+  } else if (domain.includes('academy')) {
+    const priceMatch = html.match(/"price":"([^"]+)"/);
+    if (priceMatch) {
+      data.price = priceMatch[1];
+    }
+
+    const imgMatch = html.match(/<img[^>]+class="[^"]*product-image[^"]*"[^>]+src="([^"]+)"/i);
+    if (imgMatch) {
+      data.images = [imgMatch[1]];
+    }
   }
 
   if (!data.title) {
-    data.title = extractText(html, '<title');
+    const titleTag = extractText(html, '<title');
+    if (titleTag) {
+      data.title = titleTag.split('|')[0].split('-')[0].trim();
+    }
+  }
+
+  if (data.images.length === 0) {
+    const imgMatches = html.match(/<img[^>]+src="([^"]+)"[^>]*>/gi);
+    if (imgMatches) {
+      const validImages = imgMatches
+        .map(img => {
+          const srcMatch = img.match(/src="([^"]+)"/);
+          return srcMatch ? srcMatch[1] : null;
+        })
+        .filter(src => src &&
+          (src.includes('http') || src.startsWith('//')) &&
+          !src.includes('icon') &&
+          !src.includes('logo') &&
+          !src.includes('pixel') &&
+          !src.includes('1x1')
+        );
+
+      if (validImages.length > 0) {
+        data.images = validImages.slice(0, 5);
+      }
+    }
   }
 
   return data;
