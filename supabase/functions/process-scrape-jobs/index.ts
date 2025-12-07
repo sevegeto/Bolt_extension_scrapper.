@@ -13,10 +13,29 @@ interface ProductData {
   description: string | null;
   images: string[];
   features: string[];
-  specifications: Record<string, any>;
+  specifications: Record<string, string | number>;
   availability: string | null;
   rating: number | null;
   review_count: number;
+}
+
+interface ScrapeJob {
+  id: string;
+  user_id: string;
+  urls: string[];
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  total: number;
+  results: Record<string, number>;
+  error_log: ErrorLog[];
+  created_at: string;
+  completed_at: string | null;
+}
+
+interface ErrorLog {
+  url: string;
+  error: string;
+  details?: unknown;
 }
 
 function extractDomain(url: string): string {
@@ -239,60 +258,72 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const job = jobs[0];
+    const job = jobs[0] as ScrapeJob;
 
     await supabase
       .from('scrape_jobs')
       .update({ status: 'processing' })
       .eq('id', job.id);
 
-    const errors: any[] = [];
+    const errors: ErrorLog[] = [];
     let successCount = 0;
+    const BATCH_SIZE = 3;
 
-    for (let i = 0; i < job.urls.length; i++) {
-      const url = job.urls[i];
-      
-      try {
-        const productData = await scrapeProduct(url);
-        const domain = extractDomain(url);
+    const processBatch = async (urls: string[], startIndex: number) => {
+      const promises = urls.map(async (url) => {
+        try {
+          const productData = await scrapeProduct(url);
+          const domain = extractDomain(url);
 
-        if (!productData.title) {
-          throw new Error('Could not extract product title');
-        }
+          if (!productData.title) {
+            throw new Error('Could not extract product title');
+          }
 
-        const { error: insertError } = await supabase
-          .from('products')
-          .insert({
-            user_id: user.id,
-            source_url: url,
-            domain,
-            title: productData.title,
-            price: productData.price,
-            brand: productData.brand,
-            description: productData.description,
-            images: productData.images,
-            features: productData.features,
-            specifications: productData.specifications,
-            availability: productData.availability,
-            rating: productData.rating,
-            review_count: productData.review_count,
-            scrape_method: 'bulk',
-            raw_data: productData,
-          });
+          const { error: insertError } = await supabase
+            .from('products')
+            .insert({
+              user_id: user.id,
+              source_url: url,
+              domain,
+              title: productData.title,
+              price: productData.price,
+              brand: productData.brand,
+              description: productData.description,
+              images: productData.images,
+              features: productData.features,
+              specifications: productData.specifications,
+              availability: productData.availability,
+              rating: productData.rating,
+              review_count: productData.review_count,
+              scrape_method: 'bulk',
+              raw_data: productData,
+            });
 
-        if (insertError) {
-          errors.push({ url, error: insertError.message, details: insertError });
-        } else {
+          if (insertError) {
+            errors.push({ url, error: insertError.message, details: insertError });
+            return { success: false, url };
+          }
+
           successCount++;
+          return { success: true, url };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          errors.push({ url, error: errorMessage });
+          return { success: false, url };
         }
-      } catch (error: any) {
-        errors.push({ url, error: error.message });
-      }
+      });
+
+      await Promise.all(promises);
 
       await supabase
         .from('scrape_jobs')
-        .update({ progress: i + 1 })
+        .update({ progress: startIndex + urls.length })
         .eq('id', job.id);
+    };
+
+    for (let i = 0; i < job.urls.length; i += BATCH_SIZE) {
+      const batch = job.urls.slice(i, Math.min(i + BATCH_SIZE, job.urls.length));
+      await processBatch(batch, i);
     }
 
     const finalStatus = errors.length === job.urls.length ? 'failed' : 'completed';
@@ -317,10 +348,12 @@ Deno.serve(async (req: Request) => {
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error) {
     console.error('Edge function error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    const errorStack = error instanceof Error ? error.stack : undefined;
     return new Response(
-      JSON.stringify({ error: error.message, stack: error.stack }),
+      JSON.stringify({ error: errorMessage, stack: errorStack }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
