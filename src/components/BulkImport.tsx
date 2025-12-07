@@ -66,6 +66,22 @@ export default function BulkImport({ onJobCreated }: Props) {
 
       setSuccess(true);
       setUrls('');
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-scrape-jobs`;
+
+        fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        }).catch(err => {
+          console.error('Failed to start processing:', err);
+        });
+      }
+
       setTimeout(() => {
         onJobCreated();
       }, 1500);
@@ -100,7 +116,7 @@ export default function BulkImport({ onJobCreated }: Props) {
             <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
               <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-green-800">
-                Scraping job created successfully! Redirecting to jobs panel...
+                Scraping job created and processing started! Redirecting to jobs panel...
               </p>
             </div>
           )}
