@@ -8,8 +8,11 @@ const authSection = document.getElementById('authSection');
 const userSection = document.getElementById('userSection');
 const userEmail = document.getElementById('userEmail');
 const signOutBtn = document.getElementById('signOutBtn');
-const openDashboardBtn = document.getElementById('openDashboardBtn');
+const openDashboardLink = document.getElementById('openDashboardLink');
 const viewDashboardBtn = document.getElementById('viewDashboardBtn');
+const signInForm = document.getElementById('signInForm');
+const emailInput = document.getElementById('emailInput');
+const passwordInput = document.getElementById('passwordInput');
 
 let currentProductData = null;
 let supabase = null;
@@ -45,6 +48,34 @@ async function checkAuth() {
   }
 }
 
+signInForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  if (!supabase) return;
+
+  const email = emailInput.value;
+  const password = passwordInput.value;
+
+  showStatus('Signing in...', 'loading');
+
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) throw error;
+
+    showStatus('✓ Signed in successfully!', 'success');
+    await checkAuth();
+    emailInput.value = '';
+    passwordInput.value = '';
+  } catch (error) {
+    console.error('Sign in error:', error);
+    showStatus('✗ Sign in failed: ' + error.message, 'error');
+  }
+});
+
 signOutBtn.addEventListener('click', async () => {
   if (supabase) {
     await supabase.auth.signOut();
@@ -52,7 +83,8 @@ signOutBtn.addEventListener('click', async () => {
   }
 });
 
-openDashboardBtn.addEventListener('click', () => {
+openDashboardLink.addEventListener('click', (e) => {
+  e.preventDefault();
   chrome.tabs.create({ url: CONFIG.DASHBOARD_URL });
 });
 

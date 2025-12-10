@@ -219,13 +219,29 @@
     </div>
 
     <div id="authSection" class="card" style="display: none;">
-      <h3 style="margin-bottom: 15px; font-size: 16px; color: #495057;">Sign In Required</h3>
-      <p style="margin-bottom: 15px; font-size: 13px; color: #6c757d;">
-        Please sign in to save products to your dashboard.
-      </p>
-      <button id="openDashboardBtn" class="btn btn-primary">
-        Open Dashboard to Sign In
-      </button>
+      <h3 style="margin-bottom: 15px; font-size: 16px; color: #495057;">Sign In</h3>
+      <form id="signInForm">
+        <input
+          type="email"
+          id="emailInput"
+          placeholder="Email"
+          required
+          style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+        />
+        <input
+          type="password"
+          id="passwordInput"
+          placeholder="Password"
+          required
+          style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+        />
+        <button type="submit" class="btn btn-primary">
+          Sign In
+        </button>
+      </form>
+      <div style="text-align: center; margin-top: 10px; font-size: 12px; color: #6c757d;">
+        Or <a href="#" id="openDashboardLink" style="color: #667eea; text-decoration: none;">open dashboard</a> to sign up
+      </div>
     </div>
 
     <div id="userSection" class="card" style="display: none;">
