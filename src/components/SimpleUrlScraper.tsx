@@ -151,22 +151,42 @@ export default function SimpleUrlScraper() {
         )}
       </div>
 
-      <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
-        <h4 className="font-semibold text-blue-900 mb-2">Tips for best results:</h4>
-        <ul className="space-y-2 text-sm text-blue-800">
-          <li className="flex items-start gap-2">
-            <span className="text-blue-600 font-bold">•</span>
-            <span>Use this for simple e-commerce sites with standard product pages</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-blue-600 font-bold">•</span>
-            <span>For Amazon, eBay, and complex sites, use the Chrome extension instead</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-blue-600 font-bold">•</span>
-            <span>The scraper automatically extracts title, price, images, and description</span>
-          </li>
-        </ul>
+      <div className="mt-6 space-y-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+          <h4 className="font-semibold text-blue-900 mb-2">Tips for best results:</h4>
+          <ul className="space-y-2 text-sm text-blue-800">
+            <li className="flex items-start gap-2">
+              <span className="text-blue-600 font-bold">•</span>
+              <span>Use this for simple e-commerce sites with standard product pages</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-blue-600 font-bold">•</span>
+              <span>For Amazon, eBay, and complex sites, use the Chrome extension instead</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-blue-600 font-bold">•</span>
+              <span>The scraper automatically extracts title, price, images, and description</span>
+            </li>
+          </ul>
+        </div>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6">
+          <h4 className="font-semibold text-amber-900 mb-2 flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Boost Performance with Apify
+          </h4>
+          <p className="text-sm text-amber-800 mb-3">
+            For better results with JavaScript-heavy sites and anti-bot protection, add your Apify API token as an environment variable:
+          </p>
+          <code className="block bg-amber-100 px-3 py-2 rounded text-xs text-amber-900 font-mono">
+            APIFY_API_TOKEN=your_token_here
+          </code>
+          <p className="text-xs text-amber-700 mt-2">
+            Get your free token at <a href="https://apify.com" target="_blank" rel="noopener noreferrer" className="underline font-medium">apify.com</a>
+          </p>
+        </div>
       </div>
     </div>
   );
