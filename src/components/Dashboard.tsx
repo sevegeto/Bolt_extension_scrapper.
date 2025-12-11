@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, ScrapeJob } from '../lib/supabase';
-import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown, FileSpreadsheet } from 'lucide-react';
+import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown, FileSpreadsheet, Globe } from 'lucide-react';
 import ProductGrid from './ProductGrid';
 import BulkImport from './BulkImport';
 import JobsPanel from './JobsPanel';
+import SimpleUrlScraper from './SimpleUrlScraper';
 
-type View = 'products' | 'bulk-import' | 'jobs';
+type View = 'products' | 'bulk-import' | 'jobs' | 'url-scraper';
 
 export default function Dashboard() {
   const [view, setView] = useState<View>('products');
@@ -201,15 +202,17 @@ export default function Dashboard() {
               {view === 'products' && 'Your Products'}
               {view === 'bulk-import' && 'Bulk Import'}
               {view === 'jobs' && 'Scraping Jobs'}
+              {view === 'url-scraper' && 'URL Scraper'}
             </h2>
             <p className="text-slate-600 mt-1">
               {view === 'products' && `${products.length} products scraped`}
               {view === 'bulk-import' && 'Import multiple products at once'}
               {view === 'jobs' && 'Monitor your scraping operations'}
+              {view === 'url-scraper' && 'Scrape products from any URL'}
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => setView('products')}
               className={`px-4 py-2 rounded-lg font-medium transition-all ${
@@ -220,6 +223,17 @@ export default function Dashboard() {
             >
               <List className="w-4 h-4 inline mr-2" />
               Products
+            </button>
+            <button
+              onClick={() => setView('url-scraper')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                view === 'url-scraper'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Globe className="w-4 h-4 inline mr-2" />
+              URL Scraper
             </button>
             <button
               onClick={() => setView('bulk-import')}
@@ -302,6 +316,7 @@ export default function Dashboard() {
         ) : (
           <>
             {view === 'products' && <ProductGrid products={products} onUpdate={loadProducts} />}
+            {view === 'url-scraper' && <SimpleUrlScraper />}
             {view === 'bulk-import' && <BulkImport onJobCreated={() => setView('jobs')} />}
             {view === 'jobs' && <JobsPanel jobs={jobs} onRefresh={loadJobs} />}
           </>
