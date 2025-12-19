@@ -13,29 +13,11 @@ interface ProductData {
   description: string | null;
   images: string[];
   features: string[];
-  specifications: Record<string, string | number>;
+  specifications: Record<string, any>;
   availability: string | null;
   rating: number | null;
   review_count: number;
-}
-
-interface ScrapeJob {
-  id: string;
-  user_id: string;
-  urls: string[];
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  progress: number;
-  total: number;
-  results: Record<string, number>;
-  error_log: ErrorLog[];
-  created_at: string;
-  completed_at: string | null;
-}
-
-interface ErrorLog {
-  url: string;
-  error: string;
-  details?: unknown;
+  currency?: string;
 }
 
 function extractDomain(url: string): string {
@@ -47,36 +29,62 @@ function extractDomain(url: string): string {
   }
 }
 
-function extractMetaContent(html: string, name: string): string | null {
-  const patterns = [
-    new RegExp(`<meta property="${name}" content="([^"]+)"`, 'i'),
-    new RegExp(`<meta name="${name}" content="([^"]+)"`, 'i'),
-    new RegExp(`<meta itemprop="${name}" content="([^"]+)"`, 'i'),
-  ];
+function decodeHtml(html: string): string {
+  const entities: Record<string, string> = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'",
+    '&apos;': "'",
+    '&nbsp;': ' ',
+    '&#x27;': "'",
+  };
   
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match) return match[1];
+  return html.replace(/&[#\w]+;/g, (entity) => entities[entity] || entity);
+}
+
+async function scrapeWithApify(url: string, token: string): Promise<ProductData> {
+  const input = {
+    startUrls: [{ url }],
+    crawlerType: 'cheerio',
+    maxCrawlDepth: 0,
+    maxCrawlPages: 1,
+  };
+
+  const response = await fetch(
+    'https://api.apify.com/v2/acts/apify~web-scraper/run-sync-get-dataset-items?token=' + token,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(30000),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Apify API error:', errorText);
+    throw new Error(`Apify API returned ${response.status}`);
   }
-  return null;
-}
 
-function extractText(html: string, selector: string): string | null {
-  const regex = new RegExp(`${selector}[^>]*>([^<]+)<`, 'i');
-  const match = html.match(regex);
-  return match ? match[1].trim() : null;
-}
-
-function extractAllMatches(html: string, pattern: RegExp): string[] {
-  const matches: string[] = [];
-  let match;
-  while ((match = pattern.exec(html)) !== null) {
-    matches.push(match[1]);
+  const results = await response.json();
+  
+  if (!results || !Array.isArray(results) || results.length === 0) {
+    throw new Error('No data returned from Apify');
   }
-  return matches;
+
+  const pageData = results[0];
+  const html = pageData.html || pageData.text || '';
+  
+  if (!html) {
+    throw new Error('Apify returned empty HTML');
+  }
+  
+  return extractProductDataFromHtml(html, url);
 }
 
-async function scrapeProduct(url: string): Promise<ProductData> {
+async function scrapeWithFallback(url: string): Promise<ProductData> {
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -86,26 +94,24 @@ async function scrapeProduct(url: string): Promise<ProductData> {
       'DNT': '1',
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Cache-Control': 'max-age=0',
     },
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    throw new Error(`Failed to fetch URL: ${response.statusText}`);
   }
 
   const html = await response.text();
-
+  
   if (html.includes('captcha') || html.includes('blocked') || html.length < 1000) {
     throw new Error('Site blocked request - CAPTCHA or bot detection triggered');
   }
+  
+  return extractProductDataFromHtml(html, url);
+}
 
-  const domain = extractDomain(url);
-
-  let data: ProductData = {
+function extractProductDataFromHtml(html: string, url: string): ProductData {
+  const data: ProductData = {
     title: null,
     price: null,
     brand: null,
@@ -116,108 +122,125 @@ async function scrapeProduct(url: string): Promise<ProductData> {
     availability: null,
     rating: null,
     review_count: 0,
+    currency: 'USD',
   };
 
-  data.title = extractMetaContent(html, 'og:title') ||
-               extractMetaContent(html, 'twitter:title') ||
-               extractText(html, '<h1');
+  const getMetaContent = (pattern: RegExp): string | null => {
+    const match = html.match(pattern);
+    return match && match[1] ? decodeHtml(match[1].trim()) : null;
+  };
+
+  const getAllMatches = (pattern: RegExp): string[] => {
+    const matches: string[] = [];
+    let match;
+    const regex = new RegExp(pattern.source, 'g');
+    while ((match = regex.exec(html)) !== null) {
+      if (match[1]) matches.push(match[1]);
+    }
+    return matches;
+  };
+
+  data.title = 
+    getMetaContent(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']twitter:title["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*itemprop=["']name["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<h1[^>]*>([^<]*)<\/h1>/i) ||
+    getMetaContent(/<title[^>]*>([^<]*)<\/title>/i);
+
+  data.description = 
+    getMetaContent(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']twitter:description["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["\']/i);
+
+  const ogImage = getMetaContent(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["\']/i);
+  const twitterImage = getMetaContent(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']*)["\']/i);
   
-  data.description = extractMetaContent(html, 'og:description') ||
-                     extractMetaContent(html, 'description');
-  
-  const ogImage = extractMetaContent(html, 'og:image') || extractMetaContent(html, 'twitter:image');
-  if (ogImage) {
-    data.images = [ogImage];
-  }
-
-  if (domain.includes('amazon')) {
-    const productTitle = extractText(html, '<span id="productTitle"');
-    if (productTitle) data.title = productTitle;
-    
-    const priceWhole = extractText(html, '<span class="a-price-whole"');
-    const priceFraction = extractText(html, '<span class="a-price-fraction"');
-    if (priceWhole) {
-      data.price = priceFraction ? `${priceWhole}.${priceFraction}` : priceWhole;
-    }
-    
-    const brandMatch = html.match(/<a id="bylineInfo"[^>]*>([^<]+)</);
-    if (brandMatch) data.brand = brandMatch[1].replace('Visit the ', '').replace(' Store', '').trim();
-    
-    const imageMatches = html.match(/"hiRes":"([^"]+)"/g);
-    if (imageMatches && imageMatches.length > 0) {
-      data.images = imageMatches.map(m => m.match(/"hiRes":"([^"]+)"/)?.[1] || '').filter(Boolean);
-    }
-    
-    const ratingMatch = html.match(/([0-9.]+) out of 5 stars/);
-    if (ratingMatch) {
-      data.rating = parseFloat(ratingMatch[1]);
-    }
-    
-    const reviewMatch = html.match(/([0-9,]+) ratings/);
-    if (reviewMatch) {
-      data.review_count = parseInt(reviewMatch[1].replace(/,/g, ''));
-    }
-
-    const availMatch = html.match(/<span class="a-size-medium a-color-success">([^<]+)</);
-    if (availMatch) data.availability = availMatch[1].trim();
-    
-  } else if (domain.includes('ebay')) {
-    const titleMatch = html.match(/<h1 class="x-item-title[^"]*">([^<]+)</);
-    if (titleMatch) data.title = titleMatch[1].trim();
-    
-    const priceMatch = html.match(/<div class="x-price-primary[^"]*">\s*<span[^>]*>([^<]+)</);
-    if (priceMatch) data.price = priceMatch[1].trim();
-    
-    const imageMatches = extractAllMatches(html, /<img[^>]+src="([^"]+)"[^>]*alt="Picture/);
-    if (imageMatches.length > 0) data.images = imageMatches;
-    
-  } else if (domain.includes('walmart')) {
-    const priceMatch = html.match(/"price":"([^"]+)"/);
-    if (priceMatch) {
-      data.price = priceMatch[1];
-    }
-  } else if (domain.includes('academy')) {
-    const priceMatch = html.match(/"price":"([^"]+)"/);
-    if (priceMatch) {
-      data.price = priceMatch[1];
-    }
-
-    const imgMatch = html.match(/<img[^>]+class="[^"]*product-image[^"]*"[^>]+src="([^"]+)"/i);
-    if (imgMatch) {
-      data.images = [imgMatch[1]];
-    }
-  }
-
-  if (!data.title) {
-    const titleTag = extractText(html, '<title');
-    if (titleTag) {
-      data.title = titleTag.split('|')[0].split('-')[0].trim();
-    }
-  }
-
-  if (data.images.length === 0) {
-    const imgMatches = html.match(/<img[^>]+src="([^"]+)"[^>]*>/gi);
-    if (imgMatches) {
-      const validImages = imgMatches
-        .map(img => {
-          const srcMatch = img.match(/src="([^"]+)"/);
-          return srcMatch ? srcMatch[1] : null;
-        })
-        .filter(src => src &&
-          (src.includes('http') || src.startsWith('//')) &&
-          !src.includes('icon') &&
-          !src.includes('logo') &&
-          !src.includes('pixel') &&
-          !src.includes('1x1')
-        );
-
-      if (validImages.length > 0) {
-        data.images = validImages.slice(0, 5);
+  [ogImage, twitterImage].forEach(img => {
+    if (img && !data.images.includes(img)) {
+      try {
+        const fullUrl = img.startsWith('http') ? img : new URL(img, url).href;
+        data.images.push(fullUrl);
+      } catch (e) {
+        console.error('Error processing image URL:', img);
       }
     }
+  });
+
+  const imgMatches = getAllMatches(/<img[^>]*src=["']([^"']*)["\']/i);
+  imgMatches.slice(0, 5).forEach(img => {
+    if (img && !data.images.includes(img) && (img.includes('http') || img.startsWith('//'))) {
+      try {
+        const fullUrl = img.startsWith('http') ? img : (img.startsWith('//') ? 'https:' + img : new URL(img, url).href);
+        if (!fullUrl.includes('icon') && !fullUrl.includes('logo') && !fullUrl.includes('pixel')) {
+          data.images.push(fullUrl);
+        }
+      } catch (e) {
+        console.error('Error processing image URL:', img);
+      }
+    }
+  });
+
+  const pricePatterns = [
+    /<meta[^>]*property=["']og:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
+    /<meta[^>]*property=["']product:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
+    /<span[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
+    /<div[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
+    /<span[^>]*itemprop=["']price["'][^>]*content=["']([\d.,]+)["\']/i,
+    /["']price["']\s*:\s*["']([\d.,]+)["\']/i,
+  ];
+
+  for (const pattern of pricePatterns) {
+    const priceMatch = html.match(pattern);
+    if (priceMatch && priceMatch[1]) {
+      data.price = priceMatch[1].replace(/,/g, '');
+      break;
+    }
+  }
+
+  const currencyPatterns = [
+    /<meta[^>]*property=["']og:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
+    /<meta[^>]*property=["']product:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
+  ];
+
+  for (const pattern of currencyPatterns) {
+    const currMatch = html.match(pattern);
+    if (currMatch && currMatch[1]) {
+      data.currency = currMatch[1];
+      break;
+    }
+  }
+
+  data.brand = 
+    getMetaContent(/<meta[^>]*property=["']og:brand["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*property=["']product:brand["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*itemprop=["']brand["'][^>]*content=["']([^"']*)["\']/i);
+
+  const ratingMatch = html.match(/<meta[^>]*itemprop=["']ratingValue["'][^>]*content=["']([\d.]+)["\']/i);
+  if (ratingMatch && ratingMatch[1]) {
+    data.rating = parseFloat(ratingMatch[1]);
+  }
+
+  const reviewMatch = html.match(/<meta[^>]*itemprop=["']reviewCount["'][^>]*content=["']([\d]+)["\']/i);
+  if (reviewMatch && reviewMatch[1]) {
+    data.review_count = parseInt(reviewMatch[1]);
   }
 
   return data;
+}
+
+async function scrapeProduct(url: string, apifyToken?: string): Promise<ProductData> {
+  if (apifyToken) {
+    try {
+      console.log('Using Apify for:', url);
+      return await scrapeWithApify(url, apifyToken);
+    } catch (apifyError) {
+      console.error('Apify failed, using fallback:', apifyError);
+      return await scrapeWithFallback(url);
+    }
+  } else {
+    console.log('Using fallback scraper for:', url);
+    return await scrapeWithFallback(url);
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -242,6 +265,8 @@ Deno.serve(async (req: Request) => {
       throw new Error('Invalid token');
     }
 
+    const apifyToken = Deno.env.get('APIFY_API_TOKEN');
+
     const { data: jobs, error: jobsError } = await supabase
       .from('scrape_jobs')
       .select('*')
@@ -258,72 +283,61 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const job = jobs[0] as ScrapeJob;
+    const job = jobs[0];
 
     await supabase
       .from('scrape_jobs')
       .update({ status: 'processing' })
       .eq('id', job.id);
 
-    const errors: ErrorLog[] = [];
+    const errors: any[] = [];
     let successCount = 0;
-    const BATCH_SIZE = 3;
 
-    const processBatch = async (urls: string[], startIndex: number) => {
-      const promises = urls.map(async (url) => {
-        try {
-          const productData = await scrapeProduct(url);
-          const domain = extractDomain(url);
+    for (let i = 0; i < job.urls.length; i++) {
+      const url = job.urls[i];
+      
+      try {
+        const productData = await scrapeProduct(url, apifyToken);
+        const domain = extractDomain(url);
 
-          if (!productData.title) {
-            throw new Error('Could not extract product title');
-          }
-
-          const { error: insertError } = await supabase
-            .from('products')
-            .insert({
-              user_id: user.id,
-              source_url: url,
-              domain,
-              title: productData.title,
-              price: productData.price,
-              brand: productData.brand,
-              description: productData.description,
-              images: productData.images,
-              features: productData.features,
-              specifications: productData.specifications,
-              availability: productData.availability,
-              rating: productData.rating,
-              review_count: productData.review_count,
-              scrape_method: 'bulk',
-              raw_data: productData,
-            });
-
-          if (insertError) {
-            errors.push({ url, error: insertError.message, details: insertError });
-            return { success: false, url };
-          }
-
-          successCount++;
-          return { success: true, url };
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          errors.push({ url, error: errorMessage });
-          return { success: false, url };
+        if (!productData.title) {
+          throw new Error('Could not extract product title');
         }
-      });
 
-      await Promise.all(promises);
+        const { error: insertError } = await supabase
+          .from('products')
+          .insert({
+            user_id: user.id,
+            source_url: url,
+            domain,
+            title: productData.title,
+            price: productData.price,
+            currency: productData.currency || 'USD',
+            brand: productData.brand,
+            description: productData.description,
+            images: productData.images,
+            features: productData.features,
+            specifications: productData.specifications,
+            availability: productData.availability,
+            rating: productData.rating,
+            review_count: productData.review_count,
+            scrape_method: 'bulk',
+            raw_data: productData,
+          });
+
+        if (insertError) {
+          errors.push({ url, error: insertError.message, details: insertError });
+        } else {
+          successCount++;
+        }
+      } catch (error: any) {
+        errors.push({ url, error: error.message });
+      }
 
       await supabase
         .from('scrape_jobs')
-        .update({ progress: startIndex + urls.length })
+        .update({ progress: i + 1 })
         .eq('id', job.id);
-    };
-
-    for (let i = 0; i < job.urls.length; i += BATCH_SIZE) {
-      const batch = job.urls.slice(i, Math.min(i + BATCH_SIZE, job.urls.length));
-      await processBatch(batch, i);
     }
 
     const finalStatus = errors.length === job.urls.length ? 'failed' : 'completed';
@@ -348,12 +362,10 @@ Deno.serve(async (req: Request) => {
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Edge function error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    const errorStack = error instanceof Error ? error.stack : undefined;
     return new Response(
-      JSON.stringify({ error: errorMessage, stack: errorStack }),
+      JSON.stringify({ error: error.message, stack: error.stack }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
