@@ -175,16 +175,13 @@ export default function SimpleUrlScraper() {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
-            Boost Performance with Apify
+            Apify Integration (Optional)
           </h4>
           <p className="text-sm text-amber-800 mb-3">
-            For better results with JavaScript-heavy sites and anti-bot protection, add your Apify API token as an environment variable:
+            The scraper works great without Apify! For enhanced performance with JavaScript-heavy sites, you can optionally add an Apify API token. See <strong>APIFY-SETUP.md</strong> for details.
           </p>
-          <code className="block bg-amber-100 px-3 py-2 rounded text-xs text-amber-900 font-mono">
-            APIFY_API_TOKEN=your_token_here
-          </code>
-          <p className="text-xs text-amber-700 mt-2">
-            Get your free token at <a href="https://apify.com" target="_blank" rel="noopener noreferrer" className="underline font-medium">apify.com</a>
+          <p className="text-xs text-amber-700">
+            <strong>Note:</strong> If you see "Apify scraping failed" errors, don't worry - the scraper automatically falls back to basic mode and continues working.
           </p>
         </div>
       </div>

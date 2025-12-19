@@ -1,13 +1,22 @@
-# Apify Integration Setup
+# Apify Integration Setup (Optional)
 
-## Why Use Apify?
+## Important: Apify is Optional
 
-The URL scraper now supports **Apify API** integration for enhanced scraping capabilities:
+The URL scraper works **without Apify** using a basic scraper that handles most e-commerce sites. Apify is only needed for:
+- Sites with heavy JavaScript rendering
+- Pages with strong anti-bot protection
+- Complex dynamic content
+
+**The scraper automatically uses fallback mode if Apify is not configured**, so you can use it right away without any setup.
+
+## Why Use Apify? (Optional Enhancement)
+
+Adding Apify API provides enhanced scraping capabilities:
 
 - **JavaScript Rendering**: Handles sites that load content dynamically
 - **Anti-Bot Protection**: Bypasses common anti-scraping measures
 - **Better Accuracy**: More reliable data extraction from complex sites
-- **Fallback Support**: Automatically falls back to basic scraping if Apify is not configured
+- **Smart Fallback**: Automatically falls back to basic scraper if Apify fails
 
 ## Setup Instructions
 
@@ -49,8 +58,14 @@ supabase secrets set APIFY_API_TOKEN=your_token_here
 
 The scraper intelligently chooses the best method:
 
-1. **If Apify is configured**: Uses Apify API for robust scraping
-2. **If Apify is not configured**: Uses fallback scraper (good for simple sites)
+1. **If Apify is configured**:
+   - First attempts to use Apify API for robust scraping
+   - If Apify fails, automatically falls back to basic scraper
+2. **If Apify is not configured**:
+   - Uses basic scraper (works great for most e-commerce sites)
+   - Extracts data from meta tags, schema.org markup, and common HTML patterns
+
+**You don't need Apify to use the URL scraper** - it's fully functional without it!
 
 ## Apify Free Tier
 
@@ -61,16 +76,24 @@ Apify offers a generous free tier:
 
 ## Troubleshooting
 
-**Scraper still failing?**
-- Verify your Apify token is correct
-- Check that the environment variable is set in Supabase
-- For Amazon and eBay, use the Chrome extension instead
-- Some sites with heavy protection may still block scraping
+**"Apify scraping failed" message?**
+- Don't worry! The scraper automatically falls back to basic mode
+- This message just means Apify couldn't be used, but scraping continues
+- If you see this and want to fix it:
+  - Verify your Apify token is correct
+  - Check that the environment variable is set in Supabase
+  - Ensure you have Apify credits available
 
 **Error: "Could not extract product data"**
 - The URL might not be a product page
-- Try the Chrome extension for better results
+- The site may heavily rely on JavaScript (try Apify or Chrome extension)
+- Try the Chrome extension for sites with aggressive protection
 - Check if the site requires authentication
+
+**Scraping works but data is incomplete?**
+- Basic scraper extracts from meta tags and common HTML patterns
+- For better results on complex sites, add Apify token
+- For Amazon, eBay, and sites with bot detection, use the Chrome extension
 
 ## Support
 

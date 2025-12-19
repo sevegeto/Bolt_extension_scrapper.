@@ -46,15 +46,20 @@ Deno.serve(async (req: Request) => {
     const apifyToken = Deno.env.get("APIFY_API_TOKEN");
 
     if (apifyToken) {
-      console.log('Using Apify API for scraping');
-      productData = await scrapeWithApify(url, apifyToken);
+      try {
+        console.log('Attempting to use Apify API for scraping');
+        productData = await scrapeWithApify(url, apifyToken);
+      } catch (apifyError) {
+        console.error('Apify scraping failed, falling back to basic scraper:', apifyError);
+        productData = await scrapeWithFallback(url);
+      }
     } else {
-      console.log('Using fallback scraper (Apify not configured)');
+      console.log('Using basic scraper (Apify not configured)');
       productData = await scrapeWithFallback(url);
     }
 
     if (!productData.title && !productData.price) {
-      throw new Error('Could not extract product data from this URL. Try using the Chrome extension for complex sites.');
+      throw new Error('Could not extract product data. The page may not be a product page, or it may require JavaScript rendering. Try using the Chrome extension for better results.');
     }
 
     const productRecord = {
@@ -124,22 +129,28 @@ async function scrapeWithApify(url: string, token: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
+      signal: AbortSignal.timeout(30000),
     }
   );
 
   if (!response.ok) {
-    console.error('Apify API error:', await response.text());
-    throw new Error('Apify scraping failed');
+    const errorText = await response.text();
+    console.error('Apify API error:', errorText);
+    throw new Error(`Apify API returned ${response.status}: ${errorText}`);
   }
 
   const results = await response.json();
   
-  if (!results || results.length === 0) {
+  if (!results || !Array.isArray(results) || results.length === 0) {
     throw new Error('No data returned from Apify');
   }
 
   const pageData = results[0];
-  const html = pageData.html || '';
+  const html = pageData.html || pageData.text || '';
+  
+  if (!html) {
+    throw new Error('Apify returned empty HTML');
+  }
   
   return extractProductDataFromHtml(html, url);
 }
@@ -196,23 +207,23 @@ function extractProductDataFromHtml(html: string, url: string) {
   };
 
   data.title = 
-    getMetaContent(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*name=["']twitter:title["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*itemprop=["']name["'][^>]*content=["']([^"']*)["']/i) ||
+    getMetaContent(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']twitter:title["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*itemprop=["']name["'][^>]*content=["']([^"']*)["\']/i) ||
     getMetaContent(/<h1[^>]*class=["'][^"']*product[^"']*[^>]*>([^<]*)<\/h1>/i) ||
     getMetaContent(/<h1[^>]*>([^<]*)<\/h1>/i) ||
     getMetaContent(/<title[^>]*>([^<]*)<\/title>/i);
 
   data.description = 
-    getMetaContent(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*name=["']twitter:description["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*itemprop=["']description["'][^>]*content=["']([^"']*)["']/i) ||
+    getMetaContent(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']twitter:description["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*itemprop=["']description["'][^>]*content=["']([^"']*)["\']/i) ||
     getMetaContent(/<div[^>]*class=["'][^"']*description[^"']*["'][^>]*>([^<]*)<\/div>/i);
 
-  const ogImage = getMetaContent(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["']/i);
-  const twitterImage = getMetaContent(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']*)["']/i);
-  const itemPropImage = getMetaContent(/<meta[^>]*itemprop=["']image["'][^>]*content=["']([^"']*)["']/i);
+  const ogImage = getMetaContent(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["\']/i);
+  const twitterImage = getMetaContent(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']*)["\']/i);
+  const itemPropImage = getMetaContent(/<meta[^>]*itemprop=["']image["'][^>]*content=["']([^"']*)["\']/i);
   
   [ogImage, twitterImage, itemPropImage].forEach(img => {
     if (img && !data.images.includes(img)) {
@@ -221,21 +232,27 @@ function extractProductDataFromHtml(html: string, url: string) {
     }
   });
 
-  const imgMatches = getAllMatches(/<img[^>]*src=["']([^"']*)["'][^>]*(?:class=["'][^"']*product[^"']*["']|data-[^>]*product[^>]*)/i);
+  const imgMatches = getAllMatches(/<img[^>]*src=["']([^"']*)["\']/i);
   imgMatches.slice(0, 5).forEach(img => {
-    if (img && !data.images.includes(img)) {
-      const fullUrl = img.startsWith('http') ? img : new URL(img, url).href;
-      data.images.push(fullUrl);
+    if (img && !data.images.includes(img) && (img.includes('http') || img.startsWith('//'))) {
+      try {
+        const fullUrl = img.startsWith('http') ? img : (img.startsWith('//') ? 'https:' + img : new URL(img, url).href);
+        if (!fullUrl.includes('icon') && !fullUrl.includes('logo') && !fullUrl.includes('pixel') && !fullUrl.includes('1x1')) {
+          data.images.push(fullUrl);
+        }
+      } catch (e) {
+        console.error('Error processing image URL:', img, e);
+      }
     }
   });
 
   const pricePatterns = [
-    /<meta[^>]*property=["']og:price:amount["'][^>]*content=["']([\d.,]+)["']/i,
-    /<meta[^>]*property=["']product:price:amount["'][^>]*content=["']([\d.,]+)["']/i,
+    /<meta[^>]*property=["']og:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
+    /<meta[^>]*property=["']product:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
     /<span[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
     /<div[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
-    /<span[^>]*itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
-    /["']price["']\s*:\s*["']([\d.,]+)["']/i,
+    /<span[^>]*itemprop=["']price["'][^>]*content=["']([\d.,]+)["\']/i,
+    /["']price["']\s*:\s*["']([\d.,]+)["\']/i,
   ];
 
   for (const pattern of pricePatterns) {
@@ -247,8 +264,8 @@ function extractProductDataFromHtml(html: string, url: string) {
   }
 
   const currencyPatterns = [
-    /<meta[^>]*property=["']og:price:currency["'][^>]*content=["']([A-Z]{3})["']/i,
-    /<meta[^>]*property=["']product:price:currency["'][^>]*content=["']([A-Z]{3})["']/i,
+    /<meta[^>]*property=["']og:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
+    /<meta[^>]*property=["']product:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
   ];
 
   for (const pattern of currencyPatterns) {
@@ -277,15 +294,15 @@ function extractProductDataFromHtml(html: string, url: string) {
   }
 
   data.brand = 
-    getMetaContent(/<meta[^>]*property=["']og:brand["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*property=["']product:brand["'][^>]*content=["']([^"']*)["']/i) ||
-    getMetaContent(/<meta[^>]*itemprop=["']brand["'][^>]*content=["']([^"']*)["']/i) ||
+    getMetaContent(/<meta[^>]*property=["']og:brand["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*property=["']product:brand["'][^>]*content=["']([^"']*)["\']/i) ||
+    getMetaContent(/<meta[^>]*itemprop=["']brand["'][^>]*content=["']([^"']*)["\']/i) ||
     getMetaContent(/<span[^>]*class=["'][^"']*brand[^"']*["'][^>]*>([^<]*)<\/span>/i);
 
   const availPatterns = [
-    /<meta[^>]*property=["']og:availability["'][^>]*content=["']([^"']*)["']/i,
-    /<meta[^>]*property=["']product:availability["'][^>]*content=["']([^"']*)["']/i,
-    /<link[^>]*itemprop=["']availability["'][^>]*href=["']https?:\/\/schema\.org\/([^"']*)["']/i,
+    /<meta[^>]*property=["']og:availability["'][^>]*content=["']([^"']*)["\']/i,
+    /<meta[^>]*property=["']product:availability["'][^>]*content=["']([^"']*)["\']/i,
+    /<link[^>]*itemprop=["']availability["'][^>]*href=["']https?:\/\/schema\.org\/([^"']*)["\']/i,
   ];
 
   for (const pattern of availPatterns) {
@@ -296,17 +313,17 @@ function extractProductDataFromHtml(html: string, url: string) {
     }
   }
 
-  const ratingMatch = html.match(/<meta[^>]*itemprop=["']ratingValue["'][^>]*content=["']([\d.]+)["']/i);
+  const ratingMatch = html.match(/<meta[^>]*itemprop=["']ratingValue["'][^>]*content=["']([\d.]+)["\']/i);
   if (ratingMatch && ratingMatch[1]) {
     data.rating = parseFloat(ratingMatch[1]);
   }
 
-  const reviewMatch = html.match(/<meta[^>]*itemprop=["']reviewCount["'][^>]*content=["']([\d]+)["']/i);
+  const reviewMatch = html.match(/<meta[^>]*itemprop=["']reviewCount["'][^>]*content=["']([\d]+)["\']/i);
   if (reviewMatch && reviewMatch[1]) {
     data.review_count = parseInt(reviewMatch[1]);
   }
 
-  const skuMatch = html.match(/<meta[^>]*itemprop=["']sku["'][^>]*content=["']([^"']*)["']/i);
+  const skuMatch = html.match(/<meta[^>]*itemprop=["']sku["'][^>]*content=["']([^"']*)["\']/i);
   if (skuMatch && skuMatch[1]) {
     data.specifications.sku = skuMatch[1];
   }
