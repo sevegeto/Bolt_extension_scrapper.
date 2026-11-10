@@ -1,5 +1,6 @@
 const scrapeBtn = document.getElementById('scrapeBtn');
 const previewBtn = document.getElementById('previewBtn');
+const tableBtn = document.getElementById('tableBtn');
 const statusDiv = document.getElementById('status');
 const previewContainer = document.getElementById('previewContainer');
 const previewDiv = document.getElementById('preview');
@@ -13,462 +14,307 @@ const viewDashboardBtn = document.getElementById('viewDashboardBtn');
 const signInForm = document.getElementById('signInForm');
 const emailInput = document.getElementById('emailInput');
 const passwordInput = document.getElementById('passwordInput');
+const dashboardUrlInput = document.getElementById('dashboardUrlInput');
+const sheetsUrlInput = document.getElementById('sheetsUrlInput');
+const sheetsCopyInput = document.getElementById('sheetsCopyInput');
 
 let currentProductData = null;
-let supabase = null;
 let currentUser = null;
 
-if (CONFIG.SAVE_TO === 'sheets' && CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
-  configWarning.style.display = 'block';
-}
+init().catch((error) => showStatus(error.message, 'error'));
 
-if (CONFIG.SAVE_TO === 'supabase' || !CONFIG.SAVE_TO) {
-  const { createClient } = window.supabase;
-  supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+async function init() {
+  const stored = await chrome.storage.local.get(['dashboardUrl', 'sheetsUrl', 'alsoSendToSheets']);
+  dashboardUrlInput.value = stored.dashboardUrl || CONFIG.DASHBOARD_URL;
+  sheetsUrlInput.value = stored.sheetsUrl || (CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT') ? '' : CONFIG.GOOGLE_APPS_SCRIPT_URL);
+  sheetsCopyInput.checked = Boolean(stored.alsoSendToSheets);
 
-  checkAuth();
+  if (!sheetsUrlInput.value) {
+    configWarning.style.display = 'none';
+  }
+
+  await checkAuth();
 }
 
 async function checkAuth() {
-  if (!supabase) return;
+  const session = await SupabaseClient.getSession().catch(() => null);
+  currentUser = session?.user || null;
 
-  const { data: { session } } = await supabase.auth.getSession();
-
-  if (session && session.user) {
-    currentUser = session.user;
-    userEmail.textContent = session.user.email;
+  if (currentUser) {
+    userEmail.textContent = currentUser.email;
     authSection.style.display = 'none';
     userSection.style.display = 'block';
     scrapeBtn.disabled = false;
   } else {
-    currentUser = null;
     authSection.style.display = 'block';
     userSection.style.display = 'none';
     scrapeBtn.disabled = true;
   }
 }
 
-signInForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-
-  if (!supabase) return;
-
-  const email = emailInput.value;
-  const password = passwordInput.value;
-
+signInForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
   showStatus('Signing in...', 'loading');
-
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) throw error;
-
-    showStatus('✓ Signed in successfully!', 'success');
-    await checkAuth();
+    await SupabaseClient.signIn(emailInput.value, passwordInput.value);
     emailInput.value = '';
     passwordInput.value = '';
+    await checkAuth();
+    showStatus('Signed in.', 'success');
   } catch (error) {
-    console.error('Sign in error:', error);
-    showStatus('✗ Sign in failed: ' + error.message, 'error');
+    showStatus(error.message, 'error');
   }
 });
 
 signOutBtn.addEventListener('click', async () => {
-  if (supabase) {
-    await supabase.auth.signOut();
-    checkAuth();
-  }
+  await SupabaseClient.signOut();
+  await checkAuth();
+  showStatus('Signed out.', 'success');
 });
 
-openDashboardLink.addEventListener('click', (e) => {
-  e.preventDefault();
-  chrome.tabs.create({ url: CONFIG.DASHBOARD_URL });
-});
+dashboardUrlInput.addEventListener('change', saveSettings);
+sheetsUrlInput.addEventListener('change', saveSettings);
+sheetsCopyInput.addEventListener('change', saveSettings);
 
-viewDashboardBtn.addEventListener('click', () => {
-  chrome.tabs.create({ url: CONFIG.DASHBOARD_URL });
-});
-
-function showStatus(message, type) {
-  statusDiv.textContent = message;
-  statusDiv.className = `status ${type}`;
-
-  if (type === 'success' || type === 'error') {
-    setTimeout(() => {
-      statusDiv.className = 'status';
-    }, 5000);
-  }
+async function saveSettings() {
+  await chrome.storage.local.set({
+    dashboardUrl: dashboardUrlInput.value.trim() || CONFIG.DASHBOARD_URL,
+    sheetsUrl: sheetsUrlInput.value.trim(),
+    alsoSendToSheets: sheetsCopyInput.checked,
+  });
 }
 
-function formatPreview(data) {
-  const fields = [
-    { key: 'title', label: 'Title' },
-    { key: 'description', label: 'Description' },
-    { key: 'price', label: 'Price' },
-    { key: 'currency', label: 'Currency' },
-    { key: 'brand', label: 'Brand' },
-    { key: 'model', label: 'Model' },
-    { key: 'mpn', label: 'MPN' },
-    { key: 'sku', label: 'SKU' },
-    { key: 'upc', label: 'UPC' },
-    { key: 'gtin', label: 'GTIN' },
-    { key: 'color', label: 'Color' },
-    { key: 'size', label: 'Size' },
-    { key: 'cost', label: 'Cost' },
-    { key: 'taxes', label: 'Taxes' },
-    { key: 'shipping', label: 'Shipping' },
-    { key: 'vendor', label: 'Vendor' },
-    { key: 'url', label: 'Product URL' },
-    { key: 'imageUrl', label: 'Image URL' }
-  ];
+openDashboardLink.addEventListener('click', (event) => {
+  event.preventDefault();
+  openDashboard();
+});
+viewDashboardBtn.addEventListener('click', openDashboard);
 
-  let html = '';
-
-  fields.forEach(field => {
-    const value = data[field.key];
-    if (value && value !== 'N/A' && value !== '') {
-      html += `
-        <div class="preview-item">
-          <div class="preview-label">${field.label}:</div>
-          <div class="preview-value">${value}</div>
-        </div>
-      `;
-    }
-  });
-
-  if (data.imageUrl && data.imageUrl !== 'N/A') {
-    html += `
-      <div class="preview-item">
-        <div class="preview-label">Product Image:</div>
-        <img src="${data.imageUrl}" class="preview-image" onerror="this.style.display='none'" />
-      </div>
-    `;
-  }
-
-  return html || '<p style="color: #6c757d;">No data available</p>';
+async function openDashboard() {
+  await saveSettings();
+  const url = dashboardUrlInput.value.trim() || CONFIG.DASHBOARD_URL;
+  chrome.tabs.create({ url });
 }
 
 previewBtn.addEventListener('click', async () => {
   try {
-    showStatus('Loading product data...', 'loading');
-
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scrapeProductData
-    });
-
-    const productData = results[0].result;
-    currentProductData = productData;
-
-    previewDiv.innerHTML = formatPreview(productData);
+    showStatus('Reading this page...', 'loading');
+    currentProductData = await scrapeActiveTab();
+    previewDiv.innerHTML = '';
+    previewDiv.appendChild(formatPreview(currentProductData));
     previewContainer.style.display = 'block';
-    showStatus('✓ Data loaded successfully', 'success');
-
+    showStatus('Preview ready.', 'success');
   } catch (error) {
-    console.error('Preview error:', error);
-    showStatus('✗ Failed to load data: ' + error.message, 'error');
+    showStatus(error.message, 'error');
+  }
+});
+
+tableBtn.addEventListener('click', async () => {
+  try {
+    showStatus('Looking for tables...', 'loading');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    assertPage(tab);
+    const response = await sendOrInject(tab.id, { action: 'openTableExtractor' });
+    if (!response?.success) throw new Error(response?.error || 'Could not open the table tool');
+    window.close();
+  } catch (error) {
+    showStatus(error.message, 'error');
   }
 });
 
 scrapeBtn.addEventListener('click', async () => {
   try {
-    if (CONFIG.SAVE_TO === 'sheets' && CONFIG.GOOGLE_APPS_SCRIPT_URL.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
-      showStatus('✗ Please configure Google Apps Script URL in config.js', 'error');
-      return;
-    }
-
-    if (CONFIG.SAVE_TO === 'supabase' && !currentUser) {
-      showStatus('✗ Please sign in first', 'error');
-      return;
-    }
-
+    if (!currentUser) throw new Error('Sign in first');
     scrapeBtn.disabled = true;
     previewBtn.disabled = true;
-    showStatus('⏳ Scraping product data...', 'loading');
+    showStatus('Reading this page...', 'loading');
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scrapeProductData
-    });
-
-    const productData = results[0].result;
-
-    if (!productData || !productData.title) {
-      throw new Error('No product data found on this page');
-    }
-
+    const productData = await scrapeActiveTab();
     currentProductData = productData;
+    const session = await SupabaseClient.getSession();
+    if (!session) throw new Error('Not authenticated');
 
-    if (CONFIG.SAVE_TO === 'supabase') {
-      showStatus('⏳ Saving to dashboard...', 'loading');
+    showStatus('Saving to the dashboard...', 'loading');
+    await SupabaseClient.saveProduct(toProductRecord(productData, session.user.id));
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('Not authenticated');
-      }
-
-      const productRecord = {
-        user_id: session.user.id,
-        source_url: productData.url,
-        domain: productData.domain,
-        title: productData.title === 'N/A' ? null : productData.title,
-        price: productData.price === 'N/A' ? null : productData.price,
-        currency: productData.currency === 'N/A' ? 'USD' : productData.currency,
-        brand: productData.brand === 'N/A' ? null : productData.brand,
-        description: productData.description === 'N/A' ? null : productData.description,
-        images: productData.imageUrl && productData.imageUrl !== 'N/A' ? [productData.imageUrl] : [],
-        features: [],
-        specifications: {
-          model: productData.model === 'N/A' ? null : productData.model,
-          mpn: productData.mpn === 'N/A' ? null : productData.mpn,
-          sku: productData.sku === 'N/A' ? null : productData.sku,
-          upc: productData.upc === 'N/A' ? null : productData.upc,
-          gtin: productData.gtin === 'N/A' ? null : productData.gtin,
-          color: productData.color === 'N/A' ? null : productData.color,
-          size: productData.size === 'N/A' ? null : productData.size,
-        },
-        availability: null,
-        rating: null,
-        review_count: 0,
-        scrape_method: 'extension',
-        raw_data: productData,
-      };
-
-      const { error } = await supabase.from('products').insert(productRecord);
-
-      if (error) throw error;
-
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icons/icon48.png',
-        title: 'Success!',
-        message: 'Product saved to your dashboard',
-        priority: 2
-      });
-
-      showStatus('✓ Product data successfully saved to dashboard!', 'success');
-
+    await saveSettings();
+    if (sheetsCopyInput.checked) {
+      showStatus('Sending a copy to Google Sheets...', 'loading');
+      await sendToSheets(productData);
+      showStatus('Saved. The sheet row was sent. Open the sheet to confirm it.', 'success');
     } else {
-      showStatus('⏳ Sending data to Google Sheets...', 'loading');
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT_MS);
-
-      const response = await fetch(CONFIG.GOOGLE_APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(productData),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icons/icon48.png',
-        title: 'Success!',
-        message: 'Product data added to Google Sheets',
-        priority: 2
-      });
-
-      showStatus('✓ Product data successfully added to Google Sheets!', 'success');
+      showStatus('Product saved to your dashboard.', 'success');
     }
 
-    previewDiv.innerHTML = formatPreview(productData);
+    notify('Product saved', productData.title || 'Saved to your dashboard');
+    previewDiv.innerHTML = '';
+    previewDiv.appendChild(formatPreview(productData));
     previewContainer.style.display = 'block';
-
   } catch (error) {
-    console.error('Scraping error:', error);
-
-    let errorMessage = 'Failed to add product data';
-    if (error.name === 'AbortError') {
-      errorMessage = 'Request timeout - check your Google Apps Script URL';
-    } else if (error.message) {
-      errorMessage = error.message;
-    }
-
-    showStatus('✗ ' + errorMessage, 'error');
-
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title: 'Error',
-      message: errorMessage,
-      priority: 2
-    });
+    showStatus(error.message, 'error');
+    notify('Scrape failed', error.message);
   } finally {
-    scrapeBtn.disabled = !currentUser && CONFIG.SAVE_TO === 'supabase';
+    scrapeBtn.disabled = !currentUser;
     previewBtn.disabled = false;
   }
 });
 
-function scrapeProductData() {
-  const data = {
-    title: '',
-    description: '',
-    price: '',
-    currency: '',
-    brand: '',
-    model: '',
-    mpn: '',
-    sku: '',
-    upc: '',
-    gtin: '',
-    color: '',
-    size: '',
-    cost: '',
-    taxes: '',
-    shipping: '',
-    vendor: '',
-    url: window.location.href,
-    imageUrl: '',
-    timestamp: new Date().toISOString(),
-    domain: window.location.hostname
+async function scrapeActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  assertPage(tab);
+  const response = await sendOrInject(tab.id, { action: 'scrapeProduct' });
+  if (!response?.success || !response.data?.title) {
+    throw new Error(response?.error || 'No product data found on this page');
+  }
+  return response.data;
+}
+
+function assertPage(tab) {
+  if (!tab?.id || !tab.url || /^(chrome|edge|about|devtools|chrome-extension):/i.test(tab.url)) {
+    throw new Error('Open a normal product page first');
+  }
+}
+
+async function sendOrInject(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['scraper-engine.js', 'table-extract.js', 'content.js'],
+    });
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+function toProductRecord(data, userId) {
+  const pictures = Array.isArray(data.pictures) ? data.pictures : [];
+  const images = pictures.map((picture) => {
+    if (typeof picture === 'string') return picture;
+    return picture?.url || picture?.secure_url || '';
+  }).filter((src) => /^https?:\/\//i.test(src)).slice(0, 10);
+
+  if (!images.length && /^https?:\/\//i.test(data.imageUrl || '')) images.push(data.imageUrl);
+
+  return {
+    user_id: userId,
+    source_url: data.url,
+    domain: String(data.domain || '').replace(/^www\./, '') || null,
+    title: clean(data.title),
+    price: clean(data.price),
+    currency: clean(data.currency) || 'USD',
+    brand: clean(data.brand),
+    description: clean(data.description),
+    images,
+    features: [],
+    specifications: {
+      model: clean(data.model),
+      mpn: clean(data.mpn),
+      sku: clean(data.sku),
+      upc: clean(data.upc),
+      gtin: clean(data.gtin),
+      color: clean(data.color),
+      size: clean(data.size),
+      condition: clean(data.condition),
+      warranty: clean(data.warranty),
+      original_price: clean(data.original_price),
+      category: clean(data.category_id),
+      attributes: Array.isArray(data.attributes) ? data.attributes : [],
+    },
+    availability: clean(data.available_quantity),
+    rating: null,
+    review_count: 0,
+    scrape_method: 'extension',
+    raw_data: data,
   };
+}
 
-  function getMetaContent(name) {
-    const selectors = [
-      `meta[property="${name}"]`,
-      `meta[name="${name}"]`,
-      `meta[itemprop="${name}"]`
-    ];
+function clean(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text || text === 'N/A') return null;
+  return text;
+}
 
-    for (const selector of selectors) {
-      const meta = document.querySelector(selector);
-      if (meta && meta.content) return meta.content.trim();
-    }
-    return '';
+async function sendToSheets(productData) {
+  const url = sheetsUrlInput.value.trim();
+  if (!url || url.includes('YOUR_GOOGLE_APPS_SCRIPT')) {
+    throw new Error('Add the Google Apps Script URL in the extension settings');
   }
 
-  function getText(selectors) {
-    if (typeof selectors === 'string') selectors = [selectors];
-    for (const selector of selectors) {
-      const el = document.querySelector(selector);
-      if (el && el.textContent.trim()) return el.textContent.trim();
-    }
-    return '';
-  }
+  const pictures = Array.isArray(productData.pictures) && productData.pictures.length
+    ? productData.pictures
+    : (productData.imageUrl ? [productData.imageUrl] : []);
 
-  function getAttr(selectors, attr) {
-    if (typeof selectors === 'string') selectors = [selectors];
-    for (const selector of selectors) {
-      const el = document.querySelector(selector);
-      if (el && el.getAttribute(attr)) return el.getAttribute(attr).trim();
-    }
-    return '';
-  }
+  await fetch(url, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ ...productData, pictures }),
+  });
+}
 
-  data.title = getMetaContent('og:title') ||
-    getMetaContent('twitter:title') ||
-    getText(['h1[itemprop="name"]', 'h1.product-title', 'h1.product-name', '.product-title h1', 'h1', '.title']) ||
-    document.title;
-
-  data.description = getMetaContent('og:description') ||
-    getMetaContent('twitter:description') ||
-    getMetaContent('description') ||
-    getText([
-      '[itemprop="description"]',
-      '.product-description',
-      '.product-details',
-      '#product-description',
-      '.description'
-    ]);
-
-  const priceSelectors = [
-    '[itemprop="price"]',
-    '.price',
-    '.product-price',
-    '.current-price',
-    '[data-price]',
-    '.price-now',
-    '.sale-price',
-    '.offer-price'
+function formatPreview(data) {
+  const wrapper = document.createElement('div');
+  const fields = [
+    ['Title', data.title],
+    ['Price', [data.currency, data.price].filter(Boolean).join(' ')],
+    ['Brand', data.brand],
+    ['Condition', data.condition],
+    ['SKU', data.sku],
+    ['GTIN', data.gtin],
+    ['URL', data.url],
   ];
 
-  let priceText = getText(priceSelectors) || getAttr('[itemprop="price"]', 'content');
-  if (priceText) {
-    const priceMatch = priceText.match(/[\d,]+\.?\d*/);
-    if (priceMatch) {
-      data.price = priceMatch[0].replace(/,/g, '');
-    }
-
-    const currencyMatch = priceText.match(/[$€£¥₹]/);
-    if (currencyMatch) {
-      const currencyMap = { '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR' };
-      data.currency = currencyMap[currencyMatch[0]] || 'USD';
-    } else {
-      data.currency = getMetaContent('og:price:currency') || 'USD';
-    }
-  }
-
-  data.imageUrl = getMetaContent('og:image') ||
-    getMetaContent('twitter:image') ||
-    getAttr(['[itemprop="image"]', '.product-image img', '.main-image img', 'img.primary'], 'src');
-
-  data.brand = getMetaContent('og:brand') ||
-    getMetaContent('product:brand') ||
-    getText(['[itemprop="brand"]', '.brand', '.product-brand', '[data-brand]']);
-
-  data.sku = getText(['[itemprop="sku"]', '.sku', '.product-sku', '[data-sku]']) ||
-    getAttr('[data-sku]', 'data-sku');
-
-  data.mpn = getText(['[itemprop="mpn"]', '.mpn', '[data-mpn]']) ||
-    getAttr('[data-mpn]', 'data-mpn');
-
-  data.gtin = getText(['[itemprop="gtin"]', '[itemprop="gtin13"]', '[itemprop="gtin14"]', '.gtin']) ||
-    getAttr('[itemprop="gtin"]', 'content');
-
-  data.upc = getText(['.upc', '[data-upc]', '[itemprop="upc"]']);
-
-  data.color = getText([
-    '[itemprop="color"]',
-    '.color',
-    '.product-color',
-    '.selected-color',
-    '[data-color]',
-    '.color-name'
-  ]) || getAttr('.color-swatch.selected', 'title');
-
-  data.size = getText([
-    '[itemprop="size"]',
-    '.size',
-    '.product-size',
-    '.selected-size',
-    '[data-size]'
-  ]) || getAttr('.size-option.selected', 'data-size');
-
-  const specSelectors = document.querySelectorAll('.specs tr, .specifications tr, .product-attributes tr, [class*="spec"] dt, [class*="attribute"] dt');
-  specSelectors.forEach(row => {
-    const text = row.textContent.toLowerCase();
-    const nextEl = row.nextElementSibling || row.querySelector('td:last-child');
-    const value = nextEl ? nextEl.textContent.trim() : '';
-
-    if (text.includes('model') && !data.model) data.model = value;
-    if (text.includes('mpn') && !data.mpn) data.mpn = value;
-    if (text.includes('upc') && !data.upc) data.upc = value;
-    if (text.includes('gtin') && !data.gtin) data.gtin = value;
-    if (text.includes('brand') && !data.brand) data.brand = value;
-    if (text.includes('color') && !data.color) data.color = value;
-    if (text.includes('size') && !data.size) data.size = value;
+  fields.forEach(([label, value]) => {
+    if (!value || value === 'N/A') return;
+    const item = document.createElement('div');
+    item.className = 'preview-item';
+    const name = document.createElement('div');
+    name.className = 'preview-label';
+    name.textContent = `${label}:`;
+    const text = document.createElement('div');
+    text.className = 'preview-value';
+    text.textContent = String(value);
+    item.append(name, text);
+    wrapper.appendChild(item);
   });
 
-  data.vendor = window.location.hostname.replace('www.', '');
-
-  for (const key in data) {
-    if (data[key] === '') {
-      data[key] = 'N/A';
-    }
+  const image = (data.pictures && data.pictures[0]) || data.imageUrl;
+  const imageUrl = typeof image === 'string' ? image : image?.url;
+  if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
+    const item = document.createElement('div');
+    item.className = 'preview-item';
+    const picture = document.createElement('img');
+    picture.className = 'preview-image';
+    picture.alt = data.title || 'Product';
+    picture.src = imageUrl;
+    item.appendChild(picture);
+    wrapper.appendChild(item);
   }
 
-  return data;
+  if (!wrapper.childElementCount) {
+    wrapper.textContent = 'No data available';
+  }
+  return wrapper;
+}
+
+function showStatus(message, type) {
+  statusDiv.textContent = message;
+  statusDiv.className = `status ${type}`;
+  if (type === 'success' || type === 'error') {
+    setTimeout(() => {
+      if (statusDiv.textContent === message) statusDiv.className = 'status';
+    }, 6000);
+  }
+}
+
+function notify(title, message) {
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title,
+    message: message || '',
+    priority: 1,
+  });
 }

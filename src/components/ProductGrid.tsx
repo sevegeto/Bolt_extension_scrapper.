@@ -16,7 +16,9 @@ export default function ProductGrid({ products, onUpdate }: Props) {
     setDeleting(id);
     const { error } = await supabase.from('products').delete().eq('id', id);
 
-    if (!error) {
+    if (error) {
+      alert(error.message);
+    } else {
       onUpdate();
     }
     setDeleting(null);

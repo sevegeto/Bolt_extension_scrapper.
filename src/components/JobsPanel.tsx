@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ScrapeJob, supabase } from '../lib/supabase';
-import { Clock, CheckCircle, XCircle, Loader2, RefreshCw, Play, Trash2 } from 'lucide-react';
+import { runScrapeJobs } from '../lib/jobs';
+import { Clock, CheckCircle, XCircle, Loader2, RefreshCw, Play, Trash2, RotateCcw } from 'lucide-react';
 
 type Props = {
   jobs: ScrapeJob[];
@@ -29,33 +30,52 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
     }
   };
 
-  const handleProcessJob = async () => {
+  const handleProcessJob = async (jobId?: string) => {
     setProcessing(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-scrape-jobs`;
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
+      await runScrapeJobs({
+        jobId,
+        onProgress: () => onRefresh(),
       });
+      onRefresh();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to process job';
+      alert(message);
+      onRefresh();
+    } finally {
+      setProcessing(false);
+    }
+  };
 
-      const result = await response.json();
+  const handleRetryFailed = async (job: ScrapeJob) => {
+    const failedUrls = (job.error_log || [])
+      .map((entry) => (entry && typeof entry === 'object' ? entry.url : ''))
+      .filter((url): url is string => typeof url === 'string' && url.length > 0);
 
-      if (response.ok) {
-        onRefresh();
-      } else {
-        console.error('Job processing error:', result);
-        alert(`Error: ${result.error || 'Failed to process job'}`);
-      }
-    } catch (error: any) {
-      console.error('Failed to process job:', error);
-      alert(`Error: ${error.message}`);
+    if (failedUrls.length === 0) {
+      alert('This job has no failed URLs to retry.');
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { data: created, error } = await supabase.from('scrape_jobs').insert({
+        user_id: user.id,
+        urls: failedUrls,
+        status: 'pending',
+        progress: 0,
+        total: failedUrls.length,
+      }).select('id').single();
+
+      if (error) throw error;
+      await runScrapeJobs({ jobId: created.id, onProgress: () => onRefresh() });
+      onRefresh();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to retry';
+      alert(message);
     } finally {
       setProcessing(false);
     }
@@ -99,14 +119,14 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
     );
   }
 
-  const hasPendingJobs = jobs.some(job => job.status === 'pending');
+  const resumableJob = jobs.find((job) => job.status === 'pending' || job.status === 'processing');
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
-        {hasPendingJobs && (
+        {resumableJob && (
           <button
-            onClick={handleProcessJob}
+            onClick={() => handleProcessJob(resumableJob.id)}
             disabled={processing}
             className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -118,7 +138,7 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
             ) : (
               <>
                 <Play className="w-4 h-4" />
-                Process Next Job
+                {resumableJob.status === 'processing' ? 'Resume Job' : 'Process Next Job'}
               </>
             )}
           </button>
@@ -182,7 +202,7 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
                         ? 'bg-red-500'
                         : 'bg-blue-500'
                     }`}
-                    style={{ width: `${(job.progress / job.total) * 100}%` }}
+                    style={{ width: `${job.total ? Math.min(100, (job.progress / job.total) * 100) : 0}%` }}
                   />
                 </div>
               </div>
@@ -204,6 +224,17 @@ export default function JobsPanel({ jobs, onRefresh }: Props) {
                     <span className="font-medium text-red-600">{job.results.failed || 0}</span>
                   </div>
                 </div>
+              )}
+
+              {job.error_log && job.error_log.length > 0 && (
+                <button
+                  onClick={() => handleRetryFailed(job)}
+                  disabled={processing}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Retry failed URLs
+                </button>
               )}
 
               {job.error_log && job.error_log.length > 0 && (

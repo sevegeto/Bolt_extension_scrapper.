@@ -13,10 +13,9 @@ The URL scraper works **without Apify** using a basic scraper that handles most 
 
 Adding Apify API provides enhanced scraping capabilities:
 
-- **JavaScript Rendering**: Handles sites that load content dynamically
-- **Anti-Bot Protection**: Bypasses common anti-scraping measures
-- **Better Accuracy**: More reliable data extraction from complex sites
-- **Smart Fallback**: Automatically falls back to basic scraper if Apify fails
+- **JavaScript Rendering**: Uses the Apify Web Scraper actor in a real browser
+- **Protected pages**: Used only when a direct fetch does not find a title or price
+- **No token in the scraper URL**: the server sends the token as an Authorization header
 
 ## Setup Instructions
 
@@ -56,16 +55,14 @@ supabase secrets set APIFY_API_TOKEN=your_token_here
 
 ## How It Works
 
-The scraper intelligently chooses the best method:
+Each URL is handled in this order:
 
-1. **If Apify is configured**:
-   - First attempts to use Apify API for robust scraping
-   - If Apify fails, automatically falls back to basic scraper
-2. **If Apify is not configured**:
-   - Uses basic scraper (works great for most e-commerce sites)
-   - Extracts data from meta tags, schema.org markup, and common HTML patterns
+1. Fetch the page directly and read JSON-LD, Open Graph tags, and visible price markup.
+2. If that finds a title or a price, save it. Apify is not called.
+3. If the fetch is blocked or the page has no product data, and `APIFY_API_TOKEN` is set, run Apify's `apify/web-scraper` once and read the rendered HTML.
+4. If neither method finds a title or a price, the URL is reported as failed.
 
-**You don't need Apify to use the URL scraper** - it's fully functional without it!
+Amazon and Mercado Libre are still more reliable from the Chrome extension, which reads the page you already have open.
 
 ## Apify Free Tier
 
@@ -76,13 +73,11 @@ Apify offers a generous free tier:
 
 ## Troubleshooting
 
-**"Apify scraping failed" message?**
-- Don't worry! The scraper automatically falls back to basic mode
-- This message just means Apify couldn't be used, but scraping continues
-- If you see this and want to fix it:
-  - Verify your Apify token is correct
-  - Check that the environment variable is set in Supabase
-  - Ensure you have Apify credits available
+**The error mentions both the direct fetch and Apify?**
+- The direct fetch did not find a product, and the browser scrape also failed
+- Check that `APIFY_API_TOKEN` is set on the Edge Functions
+- Check that the Apify account has credits
+- For Amazon and Mercado Libre, use the Chrome extension on the open product page
 
 **Error: "Could not extract product data"**
 - The URL might not be a product page

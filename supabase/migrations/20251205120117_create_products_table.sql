@@ -60,7 +60,7 @@
 -- Create products table
 CREATE TABLE IF NOT EXISTS products (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   source_url text NOT NULL,
   domain text,
   title text,
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS products (
   category text,
   tags text[] DEFAULT ARRAY[]::text[],
   raw_data jsonb,
-  scrape_method text DEFAULT 'extension' CHECK (scrape_method IN ('extension', 'bulk')),
+  scrape_method text DEFAULT 'extension' CHECK (scrape_method IN ('extension', 'bulk', 'url-scraper')),
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   results jsonb DEFAULT '{}'::jsonb,
   error_log jsonb DEFAULT '[]'::jsonb,
   created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
   completed_at timestamptz
 );
 
@@ -103,6 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_products_tags ON products USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_scrape_jobs_user_id ON scrape_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_user_source ON products(user_id, source_url);
 
 -- Enable Row Level Security
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
@@ -166,3 +168,28 @@ CREATE TRIGGER update_products_updated_at
   BEFORE UPDATE ON products
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_scrape_jobs_updated_at ON scrape_jobs;
+CREATE TRIGGER update_scrape_jobs_updated_at
+  BEFORE UPDATE ON scrape_jobs
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'products'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE products;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'scrape_jobs'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE scrape_jobs;
+  END IF;
+EXCEPTION
+  WHEN undefined_object THEN
+    NULL;
+END $$;

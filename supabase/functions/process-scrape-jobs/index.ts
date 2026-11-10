@@ -1,372 +1,260 @@
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { publicError, scrapeProduct } from "../_shared/extract.ts";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-interface ProductData {
-  title: string | null;
-  price: string | null;
-  brand: string | null;
-  description: string | null;
-  images: string[];
-  features: string[];
-  specifications: Record<string, any>;
-  availability: string | null;
-  rating: number | null;
-  review_count: number;
-  currency?: string;
-}
+type JobResults = { success?: number; failed?: number };
+type JobError = { url?: string; error?: string };
 
-function extractDomain(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace('www.', '');
-  } catch {
-    return 'unknown';
-  }
-}
-
-function decodeHtml(html: string): string {
-  const entities: Record<string, string> = {
-    '&amp;': '&',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'",
-    '&apos;': "'",
-    '&nbsp;': ' ',
-    '&#x27;': "'",
-  };
-  
-  return html.replace(/&[#\w]+;/g, (entity) => entities[entity] || entity);
-}
-
-async function scrapeWithApify(url: string, token: string): Promise<ProductData> {
-  const input = {
-    startUrls: [{ url }],
-    crawlerType: 'cheerio',
-    maxCrawlDepth: 0,
-    maxCrawlPages: 1,
-  };
-
-  const response = await fetch(
-    'https://api.apify.com/v2/acts/apify~web-scraper/run-sync-get-dataset-items?token=' + token,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-      signal: AbortSignal.timeout(30000),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Apify API error:', errorText);
-    throw new Error(`Apify API returned ${response.status}`);
-  }
-
-  const results = await response.json();
-  
-  if (!results || !Array.isArray(results) || results.length === 0) {
-    throw new Error('No data returned from Apify');
-  }
-
-  const pageData = results[0];
-  const html = pageData.html || pageData.text || '';
-  
-  if (!html) {
-    throw new Error('Apify returned empty HTML');
-  }
-  
-  return extractProductDataFromHtml(html, url);
-}
-
-async function scrapeWithFallback(url: string): Promise<ProductData> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch URL: ${response.statusText}`);
-  }
-
-  const html = await response.text();
-  
-  if (html.includes('captcha') || html.includes('blocked') || html.length < 1000) {
-    throw new Error('Site blocked request - CAPTCHA or bot detection triggered');
-  }
-  
-  return extractProductDataFromHtml(html, url);
-}
-
-function extractProductDataFromHtml(html: string, url: string): ProductData {
-  const data: ProductData = {
-    title: null,
-    price: null,
-    brand: null,
-    description: null,
-    images: [],
-    features: [],
-    specifications: {},
-    availability: null,
-    rating: null,
-    review_count: 0,
-    currency: 'USD',
-  };
-
-  const getMetaContent = (pattern: RegExp): string | null => {
-    const match = html.match(pattern);
-    return match && match[1] ? decodeHtml(match[1].trim()) : null;
-  };
-
-  const getAllMatches = (pattern: RegExp): string[] => {
-    const matches: string[] = [];
-    let match;
-    const regex = new RegExp(pattern.source, 'g');
-    while ((match = regex.exec(html)) !== null) {
-      if (match[1]) matches.push(match[1]);
-    }
-    return matches;
-  };
-
-  data.title = 
-    getMetaContent(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*name=["']twitter:title["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*itemprop=["']name["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<h1[^>]*>([^<]*)<\/h1>/i) ||
-    getMetaContent(/<title[^>]*>([^<]*)<\/title>/i);
-
-  data.description = 
-    getMetaContent(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*name=["']twitter:description["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["\']/i);
-
-  const ogImage = getMetaContent(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["\']/i);
-  const twitterImage = getMetaContent(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']*)["\']/i);
-  
-  [ogImage, twitterImage].forEach(img => {
-    if (img && !data.images.includes(img)) {
-      try {
-        const fullUrl = img.startsWith('http') ? img : new URL(img, url).href;
-        data.images.push(fullUrl);
-      } catch (e) {
-        console.error('Error processing image URL:', img);
-      }
-    }
-  });
-
-  const imgMatches = getAllMatches(/<img[^>]*src=["']([^"']*)["\']/i);
-  imgMatches.slice(0, 5).forEach(img => {
-    if (img && !data.images.includes(img) && (img.includes('http') || img.startsWith('//'))) {
-      try {
-        const fullUrl = img.startsWith('http') ? img : (img.startsWith('//') ? 'https:' + img : new URL(img, url).href);
-        if (!fullUrl.includes('icon') && !fullUrl.includes('logo') && !fullUrl.includes('pixel')) {
-          data.images.push(fullUrl);
-        }
-      } catch (e) {
-        console.error('Error processing image URL:', img);
-      }
-    }
-  });
-
-  const pricePatterns = [
-    /<meta[^>]*property=["']og:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
-    /<meta[^>]*property=["']product:price:amount["'][^>]*content=["']([\d.,]+)["\']/i,
-    /<span[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
-    /<div[^>]*class=["'][^"']*price[^"']*["'][^>]*>\s*[$€£¥₹]?\s*([\d.,]+)/i,
-    /<span[^>]*itemprop=["']price["'][^>]*content=["']([\d.,]+)["\']/i,
-    /["']price["']\s*:\s*["']([\d.,]+)["\']/i,
-  ];
-
-  for (const pattern of pricePatterns) {
-    const priceMatch = html.match(pattern);
-    if (priceMatch && priceMatch[1]) {
-      data.price = priceMatch[1].replace(/,/g, '');
-      break;
-    }
-  }
-
-  const currencyPatterns = [
-    /<meta[^>]*property=["']og:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
-    /<meta[^>]*property=["']product:price:currency["'][^>]*content=["']([A-Z]{3})["\']/i,
-  ];
-
-  for (const pattern of currencyPatterns) {
-    const currMatch = html.match(pattern);
-    if (currMatch && currMatch[1]) {
-      data.currency = currMatch[1];
-      break;
-    }
-  }
-
-  data.brand = 
-    getMetaContent(/<meta[^>]*property=["']og:brand["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*property=["']product:brand["'][^>]*content=["']([^"']*)["\']/i) ||
-    getMetaContent(/<meta[^>]*itemprop=["']brand["'][^>]*content=["']([^"']*)["\']/i);
-
-  const ratingMatch = html.match(/<meta[^>]*itemprop=["']ratingValue["'][^>]*content=["']([\d.]+)["\']/i);
-  if (ratingMatch && ratingMatch[1]) {
-    data.rating = parseFloat(ratingMatch[1]);
-  }
-
-  const reviewMatch = html.match(/<meta[^>]*itemprop=["']reviewCount["'][^>]*content=["']([\d]+)["\']/i);
-  if (reviewMatch && reviewMatch[1]) {
-    data.review_count = parseInt(reviewMatch[1]);
-  }
-
-  return data;
-}
-
-async function scrapeProduct(url: string, apifyToken?: string): Promise<ProductData> {
-  if (apifyToken) {
-    try {
-      console.log('Using Apify for:', url);
-      return await scrapeWithApify(url, apifyToken);
-    } catch (apifyError) {
-      console.error('Apify failed, using fallback:', apifyError);
-      return await scrapeWithFallback(url);
-    }
-  } else {
-    console.log('Using fallback scraper for:', url);
-    return await scrapeWithFallback(url);
-  }
-}
+type ScrapeJob = {
+  id: string;
+  urls: string[];
+  status: string;
+  progress: number;
+  total: number;
+  results: JobResults | null;
+  error_log: JobError[] | null;
+  updated_at: string | null;
+};
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !serviceKey) throw new Error("Supabase environment is not configured");
 
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      throw new Error('No authorization header');
-    }
+    const supabase = createClient(supabaseUrl, serviceKey);
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) throw new Error("No authorization header");
 
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.replace(/^Bearer\s+/i, "");
     const { data: { user }, error: userError } = await supabase.auth.getUser(token);
-    
-    if (userError || !user) {
-      throw new Error('Invalid token');
+    if (userError || !user) throw new Error("Invalid token");
+
+    const body = await req.json().catch(() => ({}));
+    const requestedId = typeof body.jobId === "string" ? body.jobId : "";
+    const expectedUpdatedAt = typeof body.updatedAt === "string" ? body.updatedAt : "";
+
+    let job: ScrapeJob | null = null;
+    if (requestedId) {
+      const { data, error } = await supabase
+        .from("scrape_jobs")
+        .select("*")
+        .eq("id", requestedId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      job = data as ScrapeJob | null;
+    } else {
+      const { data, error } = await supabase
+        .from("scrape_jobs")
+        .select("*")
+        .eq("user_id", user.id)
+        .in("status", ["pending", "processing"])
+        .order("created_at", { ascending: true })
+        .limit(1);
+      if (error) throw new Error(error.message);
+      job = (data?.[0] as ScrapeJob | undefined) ?? null;
     }
 
-    const apifyToken = Deno.env.get('APIFY_API_TOKEN');
+    if (!job) return json({ message: "No pending jobs", continue: false });
 
-    const { data: jobs, error: jobsError } = await supabase
-      .from('scrape_jobs')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('status', 'pending')
-      .limit(1);
-
-    if (jobsError) throw jobsError;
-
-    if (!jobs || jobs.length === 0) {
-      return new Response(
-        JSON.stringify({ message: 'No pending jobs' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const job = jobs[0];
-
-    await supabase
-      .from('scrape_jobs')
-      .update({ status: 'processing' })
-      .eq('id', job.id);
-
-    const errors: any[] = [];
-    let successCount = 0;
-
-    for (let i = 0; i < job.urls.length; i++) {
-      const url = job.urls[i];
-      
-      try {
-        const productData = await scrapeProduct(url, apifyToken);
-        const domain = extractDomain(url);
-
-        if (!productData.title) {
-          throw new Error('Could not extract product title');
-        }
-
-        const { error: insertError } = await supabase
-          .from('products')
-          .insert({
-            user_id: user.id,
-            source_url: url,
-            domain,
-            title: productData.title,
-            price: productData.price,
-            currency: productData.currency || 'USD',
-            brand: productData.brand,
-            description: productData.description,
-            images: productData.images,
-            features: productData.features,
-            specifications: productData.specifications,
-            availability: productData.availability,
-            rating: productData.rating,
-            review_count: productData.review_count,
-            scrape_method: 'bulk',
-            raw_data: productData,
-          });
-
-        if (insertError) {
-          errors.push({ url, error: insertError.message, details: insertError });
-        } else {
-          successCount++;
-        }
-      } catch (error: any) {
-        errors.push({ url, error: error.message });
+    if (job.status === "completed" || job.status === "failed" || job.progress >= job.urls.length) {
+      const unfinished = (Array.isArray(job.error_log) ? job.error_log : [])
+        .filter((entry) => entry?.error === "Scraping did not finish");
+      const updatedAtMs = job.updated_at ? new Date(job.updated_at).getTime() : 0;
+      const stillRunning = unfinished.length > 0 && Date.now() - updatedAtMs < 120000;
+      if (stillRunning && job.status !== "completed" && job.status !== "failed") {
+        return json({
+          jobId: job.id,
+          status: "processing",
+          continue: true,
+          busy: true,
+          progress: job.progress,
+          total: job.total,
+          updatedAt: job.updated_at,
+        });
       }
-
-      await supabase
-        .from('scrape_jobs')
-        .update({ progress: i + 1 })
-        .eq('id', job.id);
+      const finalized = await finalizeJob(supabase, job);
+      return json(finalized);
     }
 
-    const finalStatus = errors.length === job.urls.length ? 'failed' : 'completed';
-    
-    await supabase
-      .from('scrape_jobs')
-      .update({
-        status: finalStatus,
-        progress: job.urls.length,
-        completed_at: new Date().toISOString(),
-        error_log: errors,
-        results: { success: successCount, failed: errors.length },
-      })
-      .eq('id', job.id);
+    const index = job.progress || 0;
+    const stamp = expectedUpdatedAt || job.updated_at;
+    const url = job.urls[index];
+    const seededErrors = [
+      ...(Array.isArray(job.error_log) ? job.error_log : []),
+      { url, error: "Scraping did not finish" },
+    ];
+    let claim = supabase
+      .from("scrape_jobs")
+      .update({ status: "processing", progress: index + 1, error_log: seededErrors })
+      .eq("id", job.id)
+      .eq("user_id", user.id)
+      .eq("progress", index);
+    claim = stamp ? claim.eq("updated_at", stamp) : claim.is("updated_at", null);
 
-    return new Response(
-      JSON.stringify({
+    const { data: claimed, error: claimError } = await claim.select("id").maybeSingle();
+    if (claimError) throw new Error(claimError.message);
+    if (!claimed) {
+      return json({
         jobId: job.id,
-        status: finalStatus,
-        results: { success: successCount, failed: errors.length },
-        errors: errors.length > 0 ? errors : undefined,
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  } catch (error: any) {
-    console.error('Edge function error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message, stack: error.stack }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+        status: "processing",
+        continue: true,
+        busy: true,
+        progress: job.progress,
+        total: job.total,
+      });
+    }
+
+    let outcome: JobError | null = null;
+    let savedProduct = false;
+    try {
+      const productData = await scrapeProduct(url, Deno.env.get("APIFY_API_TOKEN") || undefined);
+      if (!productData.title) throw new Error("Could not extract a product title");
+
+      const { error: saveError } = await supabase.from("products").upsert({
+        user_id: user.id,
+        source_url: url,
+        domain: new URL(url).hostname.replace(/^www\./, ""),
+        title: productData.title,
+        price: productData.price,
+        currency: productData.currency || "USD",
+        brand: productData.brand,
+        description: productData.description,
+        images: productData.images,
+        features: productData.features,
+        specifications: productData.specifications,
+        availability: productData.availability,
+        rating: productData.rating,
+        review_count: productData.review_count,
+        scrape_method: "bulk",
+        raw_data: productData,
+      }, { onConflict: "user_id,source_url" });
+
+      if (saveError) outcome = { url, error: saveError.message };
+      else savedProduct = true;
+    } catch (error) {
+      outcome = { url, error: publicError(error) };
+    }
+
+    const saved = await recordOutcome(supabase, job.id, url, savedProduct, outcome);
+    return json(saved);
+  } catch (error) {
+    return json({ error: publicError(error) }, 400);
   }
 });
+
+async function recordOutcome(
+  supabase: ReturnType<typeof createClient>,
+  jobId: string,
+  url: string,
+  savedProduct: boolean,
+  outcome: JobError | null,
+) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data, error } = await supabase
+      .from("scrape_jobs")
+      .select("urls, progress, total, results, error_log, updated_at")
+      .eq("id", jobId)
+      .single();
+    if (error || !data) throw new Error(error?.message || "Job disappeared");
+
+    const job = data as ScrapeJob;
+    const results = {
+      success: (job.results?.success || 0) + (savedProduct ? 1 : 0),
+      failed: (job.results?.failed || 0) + (savedProduct ? 0 : 1),
+    };
+    const errors = (Array.isArray(job.error_log) ? job.error_log : [])
+      .filter((entry) => !(entry?.url === url && entry?.error === "Scraping did not finish"));
+    if (outcome) errors.push(outcome);
+
+    const done = job.progress >= job.urls.length;
+    const status = done
+      ? (results.success === 0 && results.failed > 0 ? "failed" : "completed")
+      : "processing";
+
+    let update = supabase
+      .from("scrape_jobs")
+      .update({
+        status,
+        results,
+        error_log: errors,
+        completed_at: done ? new Date().toISOString() : null,
+      })
+      .eq("id", jobId);
+    update = job.updated_at ? update.eq("updated_at", job.updated_at) : update.is("updated_at", null);
+
+    const { data: written, error: writeError } = await update.select("updated_at, progress, total, status, results").maybeSingle();
+    if (writeError) throw new Error(writeError.message);
+    if (!written) continue;
+
+    return {
+      jobId,
+      status: written.status,
+      continue: written.status === "processing",
+      busy: false,
+      progress: written.progress,
+      total: written.total,
+      updatedAt: written.updated_at,
+      results: written.results,
+    };
+  }
+
+  throw new Error("Could not save job progress. Resume the job from the Jobs tab.");
+}
+
+async function finalizeJob(supabase: ReturnType<typeof createClient>, job: ScrapeJob) {
+  const log = Array.isArray(job.error_log) ? job.error_log : [];
+  const unfinished = log.filter((entry) => entry?.error === "Scraping did not finish");
+  const errorLog = log.map((entry) => (
+    entry?.error === "Scraping did not finish"
+      ? { url: entry.url, error: "Scraping stopped before a result was saved" }
+      : entry
+  ));
+  const results = {
+    success: job.results?.success || 0,
+    failed: (job.results?.failed || 0) + unfinished.length,
+  };
+  const status = job.status === "pending" || job.status === "processing"
+    ? (results.success === 0 && results.failed > 0 ? "failed" : "completed")
+    : job.status;
+
+  if (status !== job.status || unfinished.length > 0) {
+    const patch: Record<string, unknown> = {
+      status,
+      results,
+      error_log: errorLog,
+      progress: job.urls.length,
+    };
+    if (job.status !== "completed" && job.status !== "failed") {
+      patch.completed_at = new Date().toISOString();
+    }
+    await supabase.from("scrape_jobs").update(patch).eq("id", job.id);
+  }
+
+  return {
+    jobId: job.id,
+    status,
+    continue: false,
+    progress: job.urls.length,
+    total: job.total,
+    results,
+  };
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}

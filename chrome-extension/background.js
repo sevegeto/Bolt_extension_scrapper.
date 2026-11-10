@@ -1,32 +1,60 @@
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Product Importer to Sheets v2.0 installed');
+const SCRAPER_FILES = ['scraper-engine.js', 'table-extract.js', 'content.js'];
 
-  chrome.contextMenus.create({
-    id: 'scrapeProduct',
-    title: '📦 Scrape Product to Sheets',
-    contexts: ['page', 'selection', 'link', 'image']
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'scrapeProduct',
+      title: 'Scrape this product',
+      contexts: ['page'],
+    });
+    chrome.contextMenus.create({
+      id: 'extractTables',
+      title: 'Copy tables for Excel or Sheets',
+      contexts: ['page', 'selection'],
+    });
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!tab?.id) return;
+
   if (info.menuItemId === 'scrapeProduct') {
-    chrome.action.openPopup();
+    try {
+      await chrome.action.openPopup();
+    } catch {
+      notify('Open the extension', 'Click the toolbar icon to scrape this page.');
+    }
+    return;
+  }
+
+  if (info.menuItemId === 'extractTables') {
+    await deliver(tab.id, { action: 'openTableExtractor' });
   }
 });
 
-chrome.notifications.onClicked.addListener((notificationId) => {
-  console.log('Notification clicked:', notificationId);
-});
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request) => {
   if (request.action === 'notify') {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title: request.title || 'Product Importer',
-      message: request.message || '',
-      priority: 2
-    });
+    notify(request.title || 'Product Scraper', request.message || '');
   }
-  return true;
 });
+
+async function deliver(tabId, message) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, message);
+    if (response?.success) return response;
+  } catch {
+    // The content script is not on this page yet.
+  }
+
+  await chrome.scripting.executeScript({ target: { tabId }, files: SCRAPER_FILES });
+  return chrome.tabs.sendMessage(tabId, message);
+}
+
+function notify(title, message) {
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title,
+    message,
+  });
+}

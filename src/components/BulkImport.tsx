@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { runScrapeJobs } from '../lib/jobs';
 import { Plus, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 
 type Props = {
@@ -10,12 +11,16 @@ export default function BulkImport({ onJobCreated }: Props) {
   const [urls, setUrls] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
   const [success, setSuccess] = useState(false);
+  const [progressText, setProgressText] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setWarning('');
     setSuccess(false);
+    setProgressText('');
 
     const urlList = urls
       .split('\n')
@@ -41,8 +46,13 @@ export default function BulkImport({ onJobCreated }: Props) {
       return;
     }
 
+    if (validUrls.length > 100) {
+      setError('Enter 100 URLs or fewer per job.');
+      return;
+    }
+
     if (validUrls.length !== urlList.length) {
-      setError(`Found ${urlList.length - validUrls.length} invalid URL(s). Only ${validUrls.length} valid URLs will be processed.`);
+      setWarning(`Skipped ${urlList.length - validUrls.length} invalid URL(s). ${validUrls.length} valid URLs will be processed.`);
     }
 
     setLoading(true);
@@ -54,39 +64,35 @@ export default function BulkImport({ onJobCreated }: Props) {
         throw new Error('Not authenticated');
       }
 
-      const { error: insertError } = await supabase.from('scrape_jobs').insert({
+      const { data: job, error: insertError } = await supabase.from('scrape_jobs').insert({
         user_id: user.id,
         urls: validUrls,
         status: 'pending',
         progress: 0,
         total: validUrls.length,
-      });
+      }).select('id').single();
 
       if (insertError) throw insertError;
 
-      setSuccess(true);
       setUrls('');
+      setProgressText(`Scraping 0 / ${validUrls.length}`);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-scrape-jobs`;
+      await runScrapeJobs({
+        jobId: job.id,
+        onProgress: (progress) => {
+          if (progress.progress != null && progress.total != null) {
+            setProgressText(`Scraping ${progress.progress} / ${progress.total}`);
+          }
+        },
+      });
 
-        fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-        }).catch(err => {
-          console.error('Failed to start processing:', err);
-        });
-      }
-
+      setSuccess(true);
       setTimeout(() => {
         onJobCreated();
-      }, 1500);
-    } catch (err: any) {
-      setError(err.message || 'Failed to create scraping job');
+      }, 800);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create scraping job';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -106,9 +112,16 @@ export default function BulkImport({ onJobCreated }: Props) {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-red-800">{error}</p>
+            </div>
+          )}
+
+          {warning && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-amber-800">{error}</p>
+              <p className="text-sm text-amber-800">{warning}</p>
             </div>
           )}
 
@@ -116,7 +129,7 @@ export default function BulkImport({ onJobCreated }: Props) {
             <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
               <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-green-800">
-                Scraping job created and processing started! Redirecting to jobs panel...
+                Scraping finished. Opening the jobs panel...
               </p>
             </div>
           )}
@@ -156,7 +169,7 @@ export default function BulkImport({ onJobCreated }: Props) {
             {loading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Creating Job...
+                {progressText || 'Starting...'}
               </>
             ) : (
               <>

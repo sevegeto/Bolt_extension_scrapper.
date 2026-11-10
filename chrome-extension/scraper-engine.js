@@ -1,3 +1,4 @@
+if (!globalThis.ScraperEngine) {
 const PlatformDetector = {
   detect() {
     const hostname = window.location.hostname.toLowerCase();
@@ -55,7 +56,7 @@ const PlatformDetector = {
   }
 };
 
-const ScraperEngine = {
+globalThis.ScraperEngine = {
   scrape() {
     const platform = PlatformDetector.detect();
     const data = this.initializeData(platform);
@@ -179,11 +180,13 @@ const ScraperEngine = {
         const elements = document.querySelectorAll(selector);
         elements.forEach((el) => {
           if (images.length >= max) return;
-          const src = el.getAttribute('src') || el.getAttribute('data-src') || 
+          const src = el.getAttribute('src') || el.getAttribute('data-src') ||
                      el.getAttribute('data-zoom') || el.getAttribute('data-image');
-          if (src && !images.includes(src) && src.startsWith('http')) {
-            images.push(src);
-          }
+          if (!src || src.startsWith('data:')) return;
+          try {
+            const full = new URL(src, window.location.href).href;
+            if (!images.includes(full)) images.push(full);
+          } catch (error) {}
         });
         if (images.length > 0) break;
       } catch (e) {}
@@ -218,8 +221,9 @@ const ScraperEngine = {
     ]);
 
     if (priceWhole) {
-      data.price = priceCents ? `${priceWhole}.${priceCents}` : priceWhole;
-      data.price = data.price.replace(/\./g, '').replace(/,/g, '.');
+      const whole = priceWhole.replace(/[^\d]/g, '');
+      const cents = priceCents ? priceCents.replace(/[^\d]/g, '') : '';
+      data.price = cents ? `${whole}.${cents}` : whole;
     }
 
     const originalPrice = this.getText([
@@ -237,7 +241,7 @@ const ScraperEngine = {
       '.ui-pdp-condition'
     ]).toLowerCase();
     
-    if (conditionText.includes('usado') || conditionText.includes('usado')) {
+    if (conditionText.includes('usado') || conditionText.includes('used')) {
       data.condition = 'used';
     } else if (conditionText.includes('refurbished') || conditionText.includes('reacondicionado')) {
       data.condition = 'refurbished';
@@ -1164,39 +1168,52 @@ const ScraperEngine = {
   },
 
   tryExtractFromStructuredData(data) {
-    try {
-      const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-      for (const script of jsonLdScripts) {
-        const jsonData = JSON.parse(script.textContent);
-        if (jsonData['@type'] === 'Product') {
-          if (!data.title) data.title = jsonData.name;
-          if (!data.description) data.description = jsonData.description;
-          if (!data.brand) data.brand = jsonData.brand?.name || jsonData.brand;
-          if (!data.sku) data.sku = jsonData.sku;
-          if (!data.gtin) {
-            data.gtin = jsonData.gtin || jsonData.gtin12 || jsonData.gtin13 || jsonData.gtin14 || jsonData.gtin8;
-          }
-          if (!data.upc && jsonData.gtin12) {
-            data.upc = jsonData.gtin12;
-          }
-          if (!data.mpn) data.mpn = jsonData.mpn;
+    const applyProduct = (jsonData) => {
+      if (!jsonData || typeof jsonData !== 'object') return;
+      const types = [].concat(jsonData['@type'] || []);
+      if (!types.includes('Product')) return;
 
-          if (jsonData.offers) {
-            const offers = Array.isArray(jsonData.offers) ? jsonData.offers[0] : jsonData.offers;
-            if (!data.price) data.price = String(offers.price);
-            if (!data.currency) data.currency = offers.priceCurrency;
-            if (!data.available_quantity) {
-              data.available_quantity = offers.availability?.includes('InStock') ? '999' : '0';
-            }
-          }
+      if (!data.title) data.title = jsonData.name || '';
+      if (!data.description) data.description = typeof jsonData.description === 'string' ? jsonData.description : '';
+      if (!data.brand) data.brand = jsonData.brand?.name || (typeof jsonData.brand === 'string' ? jsonData.brand : '');
+      if (!data.sku) data.sku = jsonData.sku || '';
+      if (!data.gtin) {
+        data.gtin = jsonData.gtin || jsonData.gtin12 || jsonData.gtin13 || jsonData.gtin14 || jsonData.gtin8 || '';
+      }
+      if (!data.upc && jsonData.gtin12) data.upc = jsonData.gtin12;
+      if (!data.mpn) data.mpn = jsonData.mpn || '';
 
-          if (jsonData.image && data.pictures.length === 0) {
-            data.pictures = Array.isArray(jsonData.image) ? jsonData.image : [jsonData.image];
+      if (jsonData.offers) {
+        const offers = Array.isArray(jsonData.offers) ? jsonData.offers[0] : jsonData.offers;
+        if (offers) {
+          if (!data.price && offers.price != null) data.price = String(offers.price);
+          if (!data.currency && offers.priceCurrency) data.currency = offers.priceCurrency;
+          if (!data.available_quantity && offers.availability) {
+            data.available_quantity = String(offers.availability).includes('InStock') ? '999' : '0';
           }
         }
       }
+
+      if (jsonData.image && data.pictures.length === 0) {
+        const images = Array.isArray(jsonData.image) ? jsonData.image : [jsonData.image];
+        data.pictures = images.map((image) => typeof image === 'string' ? image : image?.url).filter(Boolean).slice(0, 10);
+      }
+    };
+
+    try {
+      const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+      jsonLdScripts.forEach((script) => {
+        const jsonData = JSON.parse(script.textContent);
+        const queue = Array.isArray(jsonData) ? jsonData.slice() : [jsonData];
+        while (queue.length) {
+          const node = queue.shift();
+          if (node && node['@graph']) queue.push(...[].concat(node['@graph']));
+          applyProduct(node);
+        }
+      });
     } catch (e) {
       console.log('Could not parse structured data:', e);
     }
   }
 };
+}

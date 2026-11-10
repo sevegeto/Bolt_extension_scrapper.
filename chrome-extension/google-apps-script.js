@@ -77,7 +77,7 @@ function doPost(e) {
       data.vendor || '',
       data.platform || 'generic',
       data.url || '',
-      data.pictures ? JSON.stringify(data.pictures) : '[]',
+      (data.pictures && data.pictures.length) ? JSON.stringify(data.pictures) : (data.imageUrl ? JSON.stringify([data.imageUrl]) : '[]'),
       data.attributes ? JSON.stringify(data.attributes) : '[]',
       data.description ? data.description.substring(0, 500) : '',
       data.domain || '',

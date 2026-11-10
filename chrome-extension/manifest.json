@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Product Importer to Sheets",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "Production-ready product scraper for MercadoLibre, Amazon, eBay and 20+ e-commerce platforms",
   "permissions": [
     "activeTab",
     "scripting",
     "notifications",
     "storage",
-    "contextMenus"
+    "contextMenus",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -33,7 +34,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["scraper-engine.js", "content.js"],
+      "js": ["scraper-engine.js", "table-extract.js", "content.js"],
+      "css": ["table-extract.css"],
       "run_at": "document_idle"
     }
   ],

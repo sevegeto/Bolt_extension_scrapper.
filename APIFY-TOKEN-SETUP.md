@@ -56,20 +56,13 @@ You need to add the token as an environment variable to your Supabase edge funct
 
 Both scrapers (single URL and bulk) now have smart Apify integration:
 
-### Without Apify Token (Current State):
+### Every URL:
 ```
-URL → Basic Scraper → Bot Detection → FAILS ❌
-```
-
-### With Apify Token (After Setup):
-```
-URL → Apify API → JavaScript Rendering → Bot Bypass → SUCCESS ✅
+URL → direct fetch → title or price found → save
+                  → blocked or empty → Apify web-scraper (only if APIFY_API_TOKEN is set)
 ```
 
-**Automatic Fallback:**
-- If Apify has issues, automatically falls back to basic scraper
-- If Apify credits run out, falls back to basic scraper
-- Best of both worlds!
+A direct fetch that already finds a title or price does not spend Apify credits. If both methods fail, that URL is marked failed. The Chrome extension remains the better path for Amazon and Mercado Libre.
 
 ---
 

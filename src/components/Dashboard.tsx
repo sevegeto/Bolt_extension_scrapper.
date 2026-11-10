@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase, Product, ScrapeJob } from '../lib/supabase';
-import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown, FileSpreadsheet, Globe } from 'lucide-react';
+import { LogOut, Plus, Grid, List, Download, Loader2, ChevronDown, FileSpreadsheet, Globe, AlertCircle } from 'lucide-react';
 import ProductGrid from './ProductGrid';
 import BulkImport from './BulkImport';
 import JobsPanel from './JobsPanel';
 import SimpleUrlScraper from './SimpleUrlScraper';
+import { toCsv } from '../lib/csv';
 
 type View = 'products' | 'bulk-import' | 'jobs' | 'url-scraper';
 
@@ -13,8 +14,10 @@ export default function Dashboard() {
   const [products, setProducts] = useState<Product[]>([]);
   const [jobs, setJobs] = useState<ScrapeJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadUserData();
@@ -41,33 +44,50 @@ export default function Dashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!showExportMenu) return undefined;
+
+    const closeMenu = (event: MouseEvent) => {
+      if (!exportMenuRef.current?.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeMenu);
+    return () => document.removeEventListener('mousedown', closeMenu);
+  }, [showExportMenu]);
+
   const loadUserData = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     setUserEmail(user?.email || '');
   };
 
   const loadProducts = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
+    const { data, error: loadError } = await supabase
       .from('products')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      setProducts(data as Product[]);
+    if (loadError) {
+      setError(loadError.message);
+    } else {
+      setProducts((data || []) as Product[]);
+      setError('');
     }
     setLoading(false);
   };
 
   const loadJobs = async () => {
-    const { data, error } = await supabase
+    const { data, error: loadError } = await supabase
       .from('scrape_jobs')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(10);
+      .limit(20);
 
-    if (!error && data) {
-      setJobs(data as ScrapeJob[]);
+    if (loadError) {
+      setError(loadError.message);
+    } else {
+      setJobs((data || []) as ScrapeJob[]);
     }
   };
 
@@ -76,97 +96,79 @@ export default function Dashboard() {
   };
 
   const handleGoogleSheetsExport = () => {
-    const sheetsUrl = 'https://docs.google.com/spreadsheets/create';
-    const csvData = generateCSV('full');
-
-    alert('To export to Google Sheets:\n\n1. Copy your data (click OK to download CSV)\n2. Go to Google Sheets and create a new spreadsheet\n3. File > Import > Upload > Select the downloaded CSV\n4. Click "Import data"\n\nAlternatively, use the Chrome Extension to send data directly to Google Sheets via the Apps Script.');
-
-    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `products-for-sheets-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(generateRows('full'), `products-for-sheets-${new Date().toISOString().split('T')[0]}.csv`);
+    alert('A CSV file was downloaded.\n\nIn Google Sheets: File > Import > Upload, then choose that file.\n\nThe Chrome extension can also copy a table from any page and paste it straight into a sheet.');
   };
 
-  const generateCSV = (format: 'full' | 'mercadolibre'): string => {
-    let csv: string;
-
+  const generateRows = (format: 'full' | 'mercadolibre'): unknown[][] => {
     if (format === 'mercadolibre') {
-      csv = [
-        ['Title', 'Price', 'Currency', 'Condition', 'Available_Quantity', 'Description', 'Brand', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'Features', 'Source_URL'].join(','),
-        ...products.map(p => {
-          const images = p.images || [];
-          const features = (p.features || []).join('; ');
-          const condition = 'new';
-          const quantity = 1;
-
+      return [
+        ['Title', 'Price', 'Currency', 'Condition', 'Available_Quantity', 'Description', 'Brand', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'Features', 'Source_URL'],
+        ...products.map((product) => {
+          const images = product.images || [];
+          const specs = product.specifications || {};
           return [
-            `"${(p.title || '').replace(/"/g, '""')}"`,
-            p.price || '',
-            p.currency || 'USD',
-            condition,
-            quantity,
-            `"${(p.description || '').replace(/"/g, '""')}"`,
-            `"${(p.brand || '').replace(/"/g, '""')}"`,
+            product.title || '',
+            product.price || '',
+            product.currency || 'USD',
+            typeof specs.condition === 'string' ? specs.condition : 'new',
+            product.availability || 1,
+            product.description || '',
+            product.brand || '',
             images[0] || '',
             images[1] || '',
             images[2] || '',
             images[3] || '',
             images[4] || '',
-            `"${features.replace(/"/g, '""')}"`,
-            p.source_url
-          ].join(',');
-        })
-      ].join('\n');
-    } else {
-      csv = [
-        ['Title', 'Brand', 'Price', 'Currency', 'Description', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'All_Images', 'Features', 'Specifications', 'Availability', 'Rating', 'Reviews', 'Domain', 'Source_URL', 'Scraped_At'].join(','),
-        ...products.map(p => {
-          const images = p.images || [];
-          const allImages = images.join('|');
-          const features = (p.features || []).join('|');
-          const specs = JSON.stringify(p.specifications || {}).replace(/"/g, '""');
-
-          return [
-            `"${(p.title || '').replace(/"/g, '""')}"`,
-            `"${(p.brand || '').replace(/"/g, '""')}"`,
-            p.price || '',
-            p.currency || 'USD',
-            `"${(p.description || '').replace(/"/g, '""')}"`,
-            images[0] || '',
-            images[1] || '',
-            images[2] || '',
-            images[3] || '',
-            images[4] || '',
-            `"${allImages}"`,
-            `"${features}"`,
-            `"${specs}"`,
-            `"${(p.availability || '').replace(/"/g, '""')}"`,
-            p.rating || '',
-            p.review_count || 0,
-            p.domain || '',
-            p.source_url,
-            new Date(p.created_at).toLocaleString()
-          ].join(',');
-        })
-      ].join('\n');
+            (product.features || []).join('; '),
+            product.source_url,
+          ];
+        }),
+      ];
     }
 
-    return csv;
+    return [
+      ['Title', 'Brand', 'Price', 'Currency', 'Description', 'Image_1', 'Image_2', 'Image_3', 'Image_4', 'Image_5', 'All_Images', 'Features', 'Specifications', 'Availability', 'Rating', 'Reviews', 'Domain', 'Source_URL', 'Scraped_At'],
+      ...products.map((product) => {
+        const images = product.images || [];
+        return [
+          product.title || '',
+          product.brand || '',
+          product.price || '',
+          product.currency || 'USD',
+          product.description || '',
+          images[0] || '',
+          images[1] || '',
+          images[2] || '',
+          images[3] || '',
+          images[4] || '',
+          images.join('|'),
+          (product.features || []).join('|'),
+          JSON.stringify(product.specifications || {}),
+          product.availability || '',
+          product.rating ?? '',
+          product.review_count || 0,
+          product.domain || '',
+          product.source_url,
+          new Date(product.created_at).toLocaleString(),
+        ];
+      }),
+    ];
+  };
+
+  const downloadCsv = (rows: unknown[][], filename: string) => {
+    const blob = new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleExport = (format: 'full' | 'mercadolibre' = 'full') => {
-    const csv = generateCSV(format);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const formatSuffix = format === 'mercadolibre' ? '-mercadolibre' : '-full';
-    a.download = `products${formatSuffix}-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(generateRows(format), `products${formatSuffix}-${new Date().toISOString().split('T')[0]}.csv`);
   };
 
   return (
@@ -258,7 +260,7 @@ export default function Dashboard() {
               Jobs
             </button>
             {view === 'products' && products.length > 0 && (
-              <div className="relative">
+              <div className="relative" ref={exportMenuRef}>
                 <button
                   onClick={() => setShowExportMenu(!showExportMenu)}
                   className="px-4 py-2 bg-white text-slate-700 rounded-lg font-medium hover:bg-slate-100 transition-colors flex items-center gap-2"
@@ -308,6 +310,13 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-800">{error}</p>
+          </div>
+        )}
 
         {loading && view === 'products' ? (
           <div className="flex items-center justify-center py-20">

@@ -178,10 +178,10 @@ export default function SimpleUrlScraper() {
             Apify Integration (Optional)
           </h4>
           <p className="text-sm text-amber-800 mb-3">
-            The scraper works great without Apify! For enhanced performance with JavaScript-heavy sites, you can optionally add an Apify API token. See <strong>APIFY-SETUP.md</strong> for details.
+            Simple pages are fetched directly. Protected pages use Apify's browser scraper when the server has <strong>APIFY_API_TOKEN</strong> set. See <strong>APIFY-SETUP.md</strong>.
           </p>
           <p className="text-xs text-amber-700">
-            <strong>Note:</strong> If you see "Apify scraping failed" errors, don't worry - the scraper automatically falls back to basic mode and continues working.
+            Amazon and Mercado Libre still scrape more reliably from the Chrome extension, because that runs inside your own browser.
           </p>
         </div>
       </div>

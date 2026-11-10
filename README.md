@@ -4,7 +4,7 @@ A modern web scraper built with React, TypeScript, Vite, and Supabase. Extract p
 
 ## Important: Setup Required for Protected Sites
 
-If you're getting **"Site blocked request - CAPTCHA or bot detection triggered"** errors, you need to add your Apify API token.
+If a server scrape reports that a site blocked the request, set `APIFY_API_TOKEN` on the edge functions. Amazon and Mercado Libre are more reliable from the Chrome extension, because that scrape uses the page already open in your browser.
 
 **See [APIFY-TOKEN-SETUP.md](./APIFY-TOKEN-SETUP.md) for quick 5-minute setup instructions.**
 
@@ -13,10 +13,11 @@ If you're getting **"Site blocked request - CAPTCHA or bot detection triggered"*
 ## Features
 
 - **URL Scraper** - Paste any product URL to extract data
-- **Bulk Import** - Scrape multiple URLs at once
-- **Chrome Extension** - Scrape directly from your browser
-- **Google Sheets Export** - Export data with image URLs in columns
-- **Apify Integration** - Bypass bot detection on protected sites
+- **Bulk Import** - Scrape multiple URLs at once, one URL per request, and resume if a job stops
+- **Chrome Extension** - Scrape the open product page with the site-specific engine
+- **Copy tables** - Detect tables and repeating lists, then copy them so Excel and Google Sheets paste into cells
+- **Google Sheets Export** - Download a CSV, or send a product from the extension to an Apps Script web app
+- **Apify fallback** - The server tries a direct fetch first. When `APIFY_API_TOKEN` is set, a blocked or empty page can be loaded in Apify's browser actor
 
 ## Quick Start
 

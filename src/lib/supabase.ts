@@ -32,7 +32,7 @@ export type Product = {
   category: string | null;
   tags: string[];
   raw_data: any;
-  scrape_method: 'extension' | 'bulk';
+  scrape_method: 'extension' | 'bulk' | 'url-scraper';
   created_at: string;
   updated_at: string;
 };
@@ -47,5 +47,6 @@ export type ScrapeJob = {
   results: Record<string, any>;
   error_log: any[];
   created_at: string;
+  updated_at: string | null;
   completed_at: string | null;
 };
